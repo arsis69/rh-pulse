@@ -138,7 +138,7 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                   <Stat label="Market Cap" value={fmtUsd(token.mcap)} />
                   <Stat label="Liquidity" value={fmtUsd(token.liquidity)} />
                   <Stat label="Volume 24h" value={fmtUsd(token.volume24h)} />
-                  <Stat label="Age" value={fmtAge(token.createdAt, now)} />
+                  <Stat label="Age" value={token.createdAt > 0 ? fmtAge(token.createdAt, now) : '—'} />
                   {token.holders !== undefined && <Stat label="Holders" value={token.holders.toLocaleString()} />}
                   {token.txns24h !== undefined && <Stat label="Txns 24h" value={token.txns24h.toLocaleString()} />}
                 </div>

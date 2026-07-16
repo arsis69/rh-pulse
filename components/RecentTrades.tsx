@@ -3,16 +3,38 @@
 import { Crown, Fish, Rocket } from 'lucide-react';
 import { usePulseStore } from '@/lib/store';
 import { fmtUsd, fmtEth, fmtAge } from '@/lib/format';
+import { Token } from '@/lib/types';
 
 interface RecentTradesProps {
   now: number;
   className?: string;
+  onSelectToken?: (token: Token) => void;
 }
 
-export function RecentTrades({ now, className }: RecentTradesProps) {
+// The traded coin may have scrolled out of the feed — build a minimal Token so
+// the drawer still opens (AI analysis + contract work; live stats may be blank).
+function stubToken(address: string, ticker?: string): Token {
+  return {
+    id: address.toLowerCase(),
+    address,
+    ticker: ticker || '???',
+    name: ticker || 'Unknown',
+    launchpad: 'other',
+    source: 'flap',
+    createdAt: 0,
+    liquidity: 0,
+    mcap: 0,
+    volume24h: 0,
+    hasX: false,
+    scoreSource: null,
+  };
+}
+
+export function RecentTrades({ now, className, onSelectToken }: RecentTradesProps) {
   // server retains whale/smart-money events for 24h — the raw trade tape churns
   // in seconds, so filtering it client-side showed nothing
   const whales = usePulseStore((s) => s.whales);
+  const tokens = usePulseStore((s) => s.tokens);
 
   if (whales.length === 0) {
     return (
@@ -42,9 +64,14 @@ export function RecentTrades({ now, className }: RecentTradesProps) {
                 ? 'text-up bg-up/10'
                 : 'text-down bg-down/10';
           return (
-            <div
+            <button
               key={`${trade.ts}-${i}`}
-              className="flex items-start gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-surface-2"
+              onClick={() => {
+                const addr = trade.token.toLowerCase();
+                const t = tokens.find((x) => x.id === addr) ?? stubToken(trade.token, trade.ticker);
+                onSelectToken?.(t);
+              }}
+              className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-surface-2"
             >
               <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${colorClass}`}>
                 <Icon className="h-3.5 w-3.5" />
@@ -66,7 +93,7 @@ export function RecentTrades({ now, className }: RecentTradesProps) {
                   <span className="num text-[10px] text-ink-3">{fmtAge(trade.ts, now)}</span>
                 </div>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>

@@ -112,7 +112,7 @@ export default function RHPulse() {
           {/* desktop sidebar */}
           <aside className="hidden lg:block">
             <div className="sticky top-20">
-              <RecentTrades now={now} />
+              <RecentTrades now={now} onSelectToken={setSelectedToken} />
             </div>
           </aside>
         </div>

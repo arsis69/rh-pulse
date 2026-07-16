@@ -18,7 +18,7 @@ const DEX_TTL = 30_000; // per-dex top-up (virtuals/bankr/pons) — must catch l
 const CHAIN_TTL = 6_000;
 const ETH_TTL = 60_000;
 const DRAIN_MIN_INTERVAL = 8_000; // enrichment fires on the heartbeat cadence, not per viewer request
-const IPFS_PER_REFRESH = 16;
+const IPFS_PER_REFRESH = 24;
 const CHAIN_META_PER_REFRESH = 5; // Blockscout is generous; supply+holders lookups
 // launch bursts hit ~15 tokens/min on this chain — at 60 a card lived ~4 minutes
 // before being flushed, so a "10 minutes ago" launch was already invisible
@@ -267,13 +267,18 @@ async function drainIpfsQueue() {
           const res = await fetch(ipfsUrl(cid, gateway), { signal: AbortSignal.timeout(6_000), cache: 'no-store' });
           if (!res.ok) throw new Error(String(res.status));
           const m = await res.json();
+          const imageUrl = m.image ? ipfsUrl(String(m.image), gateway) : undefined;
           state.ipfs.set(addr, {
-            imageUrl: m.image ? ipfsUrl(String(m.image), gateway) : undefined,
+            imageUrl,
             twitter: m.twitter || undefined,
             telegram: m.telegram || undefined,
             website: m.website || undefined,
             description: m.description || undefined,
           });
+          // warm the thumbnail NOW — waiting for the next prewarm cycle left
+          // brand-new cards (the ones everyone watches) blank for an extra beat
+          const up = normalizeUpstream(imageUrl);
+          if (up) void getImage(up, 256);
           return;
         } catch {
           /* try next gateway */
@@ -549,7 +554,7 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
     tokens = mergeTokens().filter((t) => !isBlacklistedToken(t.ticker)); // re-merge so fresh enrichment attaches
     kickAnalyzeDrip(tokens);
     // prewarm thumbnails in the background — never blocks the feed response
-    const warmBatch = state.prewarmQueue.splice(0, 6);
+    const warmBatch = state.prewarmQueue.splice(0, 20);
     if (warmBatch.length) void Promise.allSettled(warmBatch.map((u) => getImage(u, 256)));
   }
 
