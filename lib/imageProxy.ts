@@ -13,6 +13,11 @@ export const IMG_ALLOWED_HOSTS = new Set([
   'raw.githubusercontent.com',
   'i.imgur.com',
   'arweave.net',
+  'files.catbox.moe',
+  'd.uguu.se',
+  'r2-uploads.imageupper.com',
+  'i.postimg.cc',
+  'postimg.cc',
 ]);
 
 // Working public gateways, fastest first (cloudflare-ipfs.com is dead, pinata rate-limits).

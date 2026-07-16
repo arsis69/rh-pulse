@@ -141,7 +141,7 @@ async function thumbnail(img: CachedImage, w: number): Promise<CachedImage> {
     const body = new Uint8Array(
       await sharp(Buffer.from(img.body), { animated: false })
         .resize({ width: w, height: w, fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 75 })
+        .webp({ quality: 85 })
         .toBuffer(),
     );
     return { body, type: 'image/webp' };

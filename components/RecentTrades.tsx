@@ -1,6 +1,5 @@
 'use client';
 
-import { Crown, Fish, Rocket } from 'lucide-react';
 import { usePulseStore } from '@/lib/store';
 import { fmtUsd, fmtEth, fmtAge } from '@/lib/format';
 import { Token } from '@/lib/types';
@@ -50,19 +49,23 @@ export function RecentTrades({ now, className, onSelectToken }: RecentTradesProp
       <div className="border-b border-edge px-4 py-3">
         <div className="text-[12px] font-semibold uppercase tracking-wider text-ink-3">Smart money & whales</div>
       </div>
-      <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-2">
+      <div className="no-scrollbar max-h-[calc(100vh-220px)] overflow-y-auto p-2">
         {whales.map((trade, i) => {
           const isTopHolder = trade.whale?.type === 'top_holder';
-          const isLargeNew = trade.whale?.type === 'large_buy' && trade.whale?.context === 'new coin';
-          const isBuy = trade.side === 'buy';
-          const Icon = isTopHolder ? Crown : isLargeNew ? Rocket : Fish;
-          const colorClass = isTopHolder
-            ? 'text-legendary bg-legendary/10'
-            : isLargeNew
-              ? 'text-pulse bg-pulse/10'
-              : isBuy
-                ? 'text-up bg-up/10'
-                : 'text-down bg-down/10';
+          const isWhale =
+            trade.whale?.type === 'large_buy' &&
+            (trade.whale?.context === '1% supply' || (trade.whale?.pct ?? 0) >= 1);
+          const isBuy = trade.side !== 'sell';
+          const colorClass = isBuy ? 'text-up bg-up/10' : 'text-down bg-down/10';
+          const icon = isTopHolder ? '💎' : isWhale ? '🐋' : '🐟';
+          const label = isTopHolder
+            ? `Smart money ${isBuy ? 'aped' : 'dumped'}`
+            : isWhale
+              ? `${isBuy ? 'Whale buy' : 'Whale sell'}`
+              : `${isBuy ? 'Large buy' : 'Large sell'}`;
+          // Only show context if it adds info beyond the percent badge
+          const showContext =
+            !isTopHolder && trade.whale?.context && trade.whale.context !== '1% supply';
           return (
             <button
               key={`${trade.ts}-${i}`}
@@ -73,23 +76,29 @@ export function RecentTrades({ now, className, onSelectToken }: RecentTradesProp
               }}
               className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-surface-2"
             >
-              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${colorClass}`}>
-                <Icon className="h-3.5 w-3.5" />
+              <span
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[13px] ${colorClass}`}
+                aria-hidden="true"
+              >
+                {icon}
               </span>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px] font-semibold text-ink">
-                  {isTopHolder
-                    ? `Smart money aped $${trade.ticker || '???'}`
-                    : `${isBuy ? 'Large buy' : 'Large sell'} $${trade.ticker || '???'}`}
+                  {label} <span className="text-ink-2">${trade.ticker || '???'}</span>
                 </div>
-                {trade.whale?.context && !isTopHolder && (
-                  <div className="text-[11px] text-pulse">{trade.whale.context}</div>
+                {showContext && (
+                  <div className={`text-[11px] ${isBuy ? 'text-up' : 'text-down'}`}>{trade.whale!.context}</div>
                 )}
-                <div className="mt-0.5 flex items-center gap-2">
+                <div className="mt-0.5 flex flex-wrap items-center gap-2">
                   <span className={`num text-[12px] font-semibold ${isBuy ? 'text-up' : 'text-down'}`}>
                     {isBuy ? '+' : '-'}
                     {trade.usd > 0 ? fmtUsd(trade.usd) : fmtEth(trade.eth)}
                   </span>
+                  {trade.whale?.pct !== undefined && (
+                    <span className="num rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-ink-2">
+                      {trade.whale.pct >= 0.1 ? trade.whale.pct.toFixed(1) : '<0.1'}%
+                    </span>
+                  )}
                   <span className="num text-[10px] text-ink-3">{fmtAge(trade.ts, now)}</span>
                 </div>
               </div>

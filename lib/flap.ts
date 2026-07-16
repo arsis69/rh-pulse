@@ -121,6 +121,7 @@ function applyTrade(log: RawLog, side: 'buy' | 'sell', ethUsd: number) {
       eth,
       usd: eth * ethUsd,
       amount,
+      supply: TOKEN_SUPPLY,
     });
   } catch {
     /* skip undecodable log */

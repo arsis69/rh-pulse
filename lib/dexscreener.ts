@@ -46,3 +46,43 @@ export async function fetchDexScreenerTokenInfo(addresses: string[]): Promise<Ma
   }
   return out;
 }
+
+interface DSProfile {
+  chainId: string;
+  tokenAddress: string;
+  icon?: string;
+  header?: string;
+  description?: string;
+  links?: { type?: string; url?: string; label?: string }[];
+}
+
+// Latest updated DexScreener token profiles — a rolling window of tokens that
+// have had their art/socials updated. Hitting this periodically catches images
+// for tokens that the per-address endpoints don't surface yet.
+export async function fetchDexScreenerLatestProfiles(): Promise<Map<string, GTTokenInfo>> {
+  const out = new Map<string, GTTokenInfo>();
+  try {
+    const res = await fetch(`${BASE}/token-profiles/latest/v1`, {
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    });
+    if (!res.ok) return out;
+    const profiles: DSProfile[] = await res.json();
+    for (const p of profiles) {
+      if (p.chainId !== 'robinhood') continue;
+      const addr = p.tokenAddress.toLowerCase();
+      if (out.has(addr)) continue;
+      out.set(addr, {
+        imageUrl: p.icon,
+        bannerUrl: p.header,
+        description: p.description,
+        website: p.links?.find((l) => l.label === 'Website' || l.type === 'website')?.url,
+        twitter: p.links?.find((l) => l.type === 'twitter')?.url,
+        telegram: p.links?.find((l) => l.type === 'telegram')?.url,
+      });
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}

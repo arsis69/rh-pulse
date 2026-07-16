@@ -54,6 +54,7 @@ export interface Token {
 export interface WhaleMeta {
   type: 'top_holder' | 'large_buy';
   context?: string; // e.g. "top 30 $PEPE holder" or "new coin"
+  pct?: number; // % of total supply bought/sold
 }
 
 export interface TradeEvent {
@@ -65,6 +66,7 @@ export interface TradeEvent {
   eth: number;
   usd: number;
   amount?: number; // token units bought/sold when available
+  supply?: number; // total supply at trade time, so pct can be computed even if token drops out of feed
   whale?: WhaleMeta;
 }
 

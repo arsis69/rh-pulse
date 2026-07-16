@@ -139,6 +139,7 @@ export async function refreshKlik(ethUsd: number): Promise<KlikSnapshot> {
           eth,
           usd: eth * ethUsd,
           amount,
+          supply: launch?.supply,
         });
       } catch {
         /* skip */

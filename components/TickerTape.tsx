@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, ArrowDownRight, Flame, TrendingUp, Fish, Crown } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Flame, TrendingUp } from 'lucide-react';
 import { usePulseStore } from '@/lib/store';
 import { Token, TradeEvent } from '@/lib/types';
 import { fmtUsd } from '@/lib/format';
@@ -53,17 +53,37 @@ function TapeItemRow({ item, onClick }: { item: TapeItem; onClick?: (token: Toke
   }
 
   // whale / smart money
+  const isBuy = item.trade.side !== 'sell';
   const isSmart = item.trade.whale?.type === 'top_holder';
+  const isWhale =
+    item.trade.whale?.type === 'large_buy' &&
+    (item.trade.whale?.context === '1% supply' || (item.trade.whale?.pct ?? 0) >= 1);
+  const color = isBuy ? 'text-up' : 'text-down';
+  const icon = isSmart ? '💎' : isWhale ? '🐋' : '🐟';
+  const label = isSmart
+    ? 'smart money'
+    : isWhale
+      ? isBuy
+        ? 'whale buy'
+        : 'whale sell'
+      : isBuy
+        ? 'large buy'
+        : 'large sell';
   return (
     <span
       onClick={() => onClick?.(token)}
       className={`mx-3 inline-flex h-7 items-center gap-2 whitespace-nowrap rounded-full border border-edge bg-surface px-2.5 py-1 text-[13px] leading-none ${clickable}`}
     >
-      {isSmart ? <Crown className="h-3.5 w-3.5 text-legendary" /> : <Fish className="h-3.5 w-3.5 text-pulse" />}
+      <span className={`text-[13px] ${color}`} aria-hidden="true">{icon}</span>
       <TokenImage key={token.imageUrl} src={token.imageUrl} alt={token.ticker} className="h-4 w-4 rounded-full object-cover" />
       <span className="font-bold">${token.ticker}</span>
-      <span className="text-ink-2">{isSmart ? 'smart money in' : 'whale aped'}</span>
+      <span className={`text-ink-2 ${color}`}>{label}</span>
       <span className="num text-ink-3">{item.trade.usd > 0 ? fmtUsd(item.trade.usd) : `${item.trade.eth.toFixed(2)} ETH`}</span>
+      {item.trade.whale?.pct !== undefined && (
+        <span className={`num rounded bg-surface-2 px-1.5 py-0 text-[11px] font-semibold ${color}`}>
+          {item.trade.whale.pct >= 0.1 ? item.trade.whale.pct.toFixed(1) : '<0.1'}%
+        </span>
+      )}
     </span>
   );
 }
@@ -103,9 +123,9 @@ export function TickerTape({ onSelectToken }: TickerTapeProps) {
       .slice(0, 5)
       .map((token) => ({ type: 'mover' as const, token, change: token.priceChange24h! }));
 
-    // Recent whale / smart-money buys
+    // Recent whale / smart-money moves (buys + sells)
     const whales = [...activity]
-      .filter((t) => t.whale && t.side === 'buy')
+      .filter((t) => t.whale)
       .slice(0, 5)
       .map((trade) => ({ token: byId.get(trade.token.toLowerCase()), trade }))
       .filter((x): x is { token: Token; trade: TradeEvent } => Boolean(x.token))

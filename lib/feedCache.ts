@@ -3,7 +3,8 @@
 // Module-level cache keeps GeckoTerminal within its ~30 req/min budget regardless of viewers.
 import { Token, TradeEvent, FeedPayload, LLMAnalysis } from '@/lib/types';
 import { fetchNewPools, fetchDexPools, fetchTokenInfo, GTTokenInfo } from '@/lib/gecko';
-import { fetchDexScreenerTokenInfo } from '@/lib/dexscreener';
+import { fetchDexScreenerTokenInfo, fetchDexScreenerLatestProfiles } from '@/lib/dexscreener';
+import { fetchOnChainMeta } from '@/lib/onchainMeta';
 import { refreshFlap, FlapSnapshot } from '@/lib/flap';
 import { refreshKlik, KlikSnapshot } from '@/lib/klik';
 import { analyzeToken } from '@/lib/llm';
@@ -17,6 +18,9 @@ const GECKO_TTL = 30_000; // slow down to stay inside GT ~30 req/min free tier
 const DEX_TTL = 30_000; // per-dex top-up (virtuals/bankr/pons) — must catch launches GT's newest list churns past
 const CHAIN_TTL = 6_000;
 const ETH_TTL = 60_000;
+const DS_INFO_TTL = 10 * 60_000; // DexScreener images/socials don't change often
+const DS_PROFILE_TTL = 2 * 60_000; // latest profiles refresh every couple minutes
+const ONCHAIN_META_PER_REFRESH = 8; // RPC calls are cheap but we still pace them
 const DRAIN_MIN_INTERVAL = 8_000; // enrichment fires on the heartbeat cadence, not per viewer request
 const IPFS_PER_REFRESH = 24;
 const CHAIN_META_PER_REFRESH = 5; // Blockscout is generous; supply+holders lookups
@@ -69,6 +73,12 @@ interface CacheState {
   // in seconds on this chain, so rare big buys must not be flushed with it
   whaleEvents: Map<string, TradeEvent>;
   prewarmQueue: string[]; // upstream image refs to pull into the cache before viewers ask
+  dsInfo: Map<string, GTTokenInfo | null>; // DexScreener image/social enrichment
+  dsInfoAt: number;
+  dsProfiles: Map<string, GTTokenInfo | null>; // DexScreener latest-profiles cache
+  dsProfilesAt: number;
+  onchainMeta: Map<string, { imageUrl?: string; description?: string; twitter?: string; telegram?: string; website?: string } | null>;
+  onchainMetaQueue: string[];
 }
 
 const state: CacheState = {
@@ -95,6 +105,12 @@ const state: CacheState = {
   analyzeBusy: false,
   whaleEvents: new Map(),
   prewarmQueue: [],
+  dsInfo: new Map(),
+  dsInfoAt: 0,
+  dsProfiles: new Map(),
+  dsProfilesAt: 0,
+  onchainMeta: new Map(),
+  onchainMetaQueue: [],
 };
 
 async function refreshEth() {
@@ -289,6 +305,21 @@ async function drainIpfsQueue() {
   );
 }
 
+async function drainOnchainMetaQueue() {
+  const batch = state.onchainMetaQueue.splice(0, ONCHAIN_META_PER_REFRESH);
+  await Promise.all(
+    batch.map(async (addr) => {
+      if (state.onchainMeta.has(addr)) return;
+      const meta = await fetchOnChainMeta(addr);
+      state.onchainMeta.set(addr, meta);
+      if (meta?.imageUrl) {
+        const up = normalizeUpstream(meta.imageUrl);
+        if (up) void getImage(up, 256);
+      }
+    }),
+  );
+}
+
 // On-chain token meta (real supply + holders) via Blockscout — GT's fdv_usd is
 // often stale for brand-new pools, so mcap is computed as live price × supply.
 async function drainChainMetaQueue() {
@@ -374,7 +405,55 @@ export function setAnalysisInCache(address: string, analysis: LLMAnalysis) {
   state.analyses.set(address.toLowerCase(), analysis);
 }
 
-function mergeTokens(): Token[] {
+async function refreshDexScreenerProfiles() {
+  if (Date.now() - state.dsProfilesAt < DS_PROFILE_TTL) return;
+  const profiles = await fetchDexScreenerLatestProfiles();
+  for (const [addr, info] of profiles) {
+    state.dsProfiles.set(addr, info);
+  }
+  state.dsProfilesAt = Date.now();
+}
+
+async function enrichDexScreenerInfo(tokens: Token[]) {
+  // DexScreener has the best token art/social index for RHChain. Only fetch
+  // for tokens that still lack image metadata; cache and re-use between polls.
+  const now = Date.now();
+  if (now - state.dsInfoAt < DS_INFO_TTL && state.dsInfo.size > 0) {
+    applyDsInfo(tokens);
+    return;
+  }
+  const missing = tokens.filter((t) => !t.imageUrl || !t.bannerUrl).map((t) => t.id);
+  if (!missing.length) return;
+
+  const batchSize = 30;
+  const batches: string[][] = [];
+  for (let i = 0; i < missing.length; i += batchSize) batches.push(missing.slice(i, i + batchSize));
+
+  const results = await Promise.all(batches.map((addrs) => fetchDexScreenerTokenInfo(addrs)));
+  for (const batch of results) {
+    for (const [addr, info] of batch) {
+      state.dsInfo.set(addr.toLowerCase(), info);
+    }
+  }
+  state.dsInfoAt = now;
+  applyDsInfo(tokens);
+}
+
+function applyDsInfo(tokens: Token[]) {
+  for (const t of tokens) {
+    const info = state.dsInfo.get(t.id);
+    if (!info) continue;
+    if (!t.imageUrl && info.imageUrl) t.imageUrl = info.imageUrl;
+    if (!t.bannerUrl && info.bannerUrl) t.bannerUrl = info.bannerUrl;
+    // socials too, if GT didn't provide them
+    if (!t.twitter && info.twitter) t.twitter = info.twitter;
+    if (!t.telegram && info.telegram) t.telegram = info.telegram;
+    if (!t.website && info.website) t.website = info.website;
+    if (!t.description && info.description) t.description = info.description;
+  }
+}
+
+async function mergeTokens(): Promise<Token[]> {
   const byAddr = new Map<string, Token>();
 
   for (const t of state.flap.tokens) byAddr.set(t.id, { ...t });
@@ -464,6 +543,9 @@ function mergeTokens(): Token[] {
   }
   if (extras.length) tokens = [...tokens.slice(0, Math.max(tokens.length - extras.length, 0)), ...extras];
 
+  // fill missing art from DexScreener before proxying
+  await enrichDexScreenerInfo(tokens);
+
   for (const t of tokens) {
     // GT token info (images/socials/gt_score for DEX tokens)
     const info = state.info.get(t.id);
@@ -511,14 +593,39 @@ function mergeTokens(): Token[] {
       }
     }
 
+    // DexScreener latest profiles (rolling window of recently updated art)
+    const dsProfile = state.dsProfiles.get(t.id);
+    if (dsProfile) {
+      t.imageUrl = t.imageUrl ?? dsProfile.imageUrl;
+      t.bannerUrl = t.bannerUrl ?? dsProfile.bannerUrl;
+      t.twitter = t.twitter ?? dsProfile.twitter;
+      t.telegram = t.telegram ?? dsProfile.telegram;
+      t.website = t.website ?? dsProfile.website;
+      t.description = t.description ?? dsProfile.description;
+    }
+
+    // On-chain metadata (Pons-style tokens store logo + socials in the contract)
+    const onchain = state.onchainMeta.get(t.id);
+    if (onchain) {
+      t.imageUrl = t.imageUrl ?? onchain.imageUrl;
+      t.bannerUrl = t.bannerUrl ?? onchain.imageUrl;
+      t.twitter = t.twitter ?? onchain.twitter;
+      t.telegram = t.telegram ?? onchain.telegram;
+      t.website = t.website ?? onchain.website;
+      t.description = t.description ?? onchain.description;
+    } else if (!t.imageUrl && !state.onchainMetaQueue.includes(t.id)) {
+      state.onchainMetaQueue.push(t.id);
+    }
+
     t.hasX = Boolean(t.twitter);
 
     // serve images through our origin as edge-cacheable webp thumbnails; queue
     // unseen art for prewarm so it's resident before the first viewer asks
-    const up = normalizeUpstream(t.imageUrl);
+    const originalImageUrl = t.imageUrl;
+    const up = normalizeUpstream(originalImageUrl);
     if (up && !isWarm(up, 256) && !state.prewarmQueue.includes(up)) state.prewarmQueue.push(up);
-    t.imageUrl = proxiedImageUrl(t.imageUrl, 256);
-    t.bannerUrl = proxiedImageUrl(t.bannerUrl, 640);
+    t.imageUrl = proxiedImageUrl(originalImageUrl, 256);
+    t.bannerUrl = proxiedImageUrl(t.bannerUrl || originalImageUrl, 640);
 
     // fallback heuristic score when no GT score or LLM analysis exists
     attachScore(t);
@@ -542,16 +649,17 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   await refreshEth();
   await Promise.all([refreshGecko(), refreshDexTopUps(), refreshChain()]);
 
-  let tokens = mergeTokens().filter((t) => !isBlacklistedToken(t.ticker));
+  let tokens = (await mergeTokens()).filter((t) => !isBlacklistedToken(t.ticker));
 
   // Enrichment runs on the heartbeat cadence, never per viewer request —
   // otherwise N viewers hammering /api/feed multiplies upstream calls and
   // burns the GT/LLM budget (feed reads stay cheap under load).
   if (Date.now() - state.drainAt >= DRAIN_MIN_INTERVAL) {
     state.drainAt = Date.now();
-    await Promise.all([drainInfoQueue(), drainIpfsQueue(), drainChainMetaQueue()]);
+    await Promise.all([drainInfoQueue(), drainIpfsQueue(), drainOnchainMetaQueue(), drainChainMetaQueue()]);
+    await refreshDexScreenerProfiles();
     await loadKnownAnalyses(tokens);
-    tokens = mergeTokens().filter((t) => !isBlacklistedToken(t.ticker)); // re-merge so fresh enrichment attaches
+    tokens = (await mergeTokens()).filter((t) => !isBlacklistedToken(t.ticker)); // re-merge so fresh enrichment attaches
     kickAnalyzeDrip(tokens);
     // prewarm thumbnails in the background — never blocks the feed response
     const warmBatch = state.prewarmQueue.splice(0, 20);
@@ -566,28 +674,40 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   // whale here (the old $1000 bar fired ~never)
   const WHALE_USD = 400;
   const WHALE_ETH = 0.2;
+
+  const supplyPct = (trade: TradeEvent, token?: Token): number | undefined => {
+    const totalSupply = token?.supply ?? trade.supply;
+    if (!totalSupply || totalSupply <= 0) return undefined;
+    let amount = trade.amount;
+    if (amount === undefined && token?.priceUsd && token.priceUsd > 0 && trade.usd > 0) {
+      amount = trade.usd / token.priceUsd;
+    }
+    if (amount === undefined || amount <= 0) return undefined;
+    return (amount / totalSupply) * 100;
+  };
+
   const flagged: TradeEvent[] = [...state.flap.activity, ...state.klik.activity]
     .sort((a, b) => b.ts - a.ts)
     .map((trade) => {
       if (trade.whale) return trade;
       const t = tokens.find((x) => x.id === trade.token.toLowerCase());
+      const pct = supplyPct(trade, t);
 
       // smart money = one of the top 30 holders of a top-30 coin
       const buyer = trade.address?.toLowerCase();
       if (buyer && smartMoneySet.has(buyer)) {
-        return { ...trade, whale: { type: 'top_holder', context: 'smart money' } as const };
+        return { ...trade, whale: { type: 'top_holder', context: 'smart money', pct } as const };
       }
 
-      // whale = buy > 1% of total supply
-      const isWhaleBuy =
-        trade.side === 'buy' &&
-        t &&
-        t.supply &&
-        t.supply > 0 &&
+      // whale = buy or sell > 1% of total supply
+      const totalSupply = t?.supply ?? trade.supply;
+      const isWhaleMove =
+        totalSupply &&
+        totalSupply > 0 &&
         trade.amount !== undefined &&
-        trade.amount > t.supply * 0.01;
-      if (isWhaleBuy) {
-        return { ...trade, whale: { type: 'large_buy', context: '1% supply' } as const };
+        Math.abs(trade.amount) > totalSupply * 0.01;
+      if (isWhaleMove) {
+        return { ...trade, whale: { type: 'large_buy', context: '1% supply', pct } as const };
       }
 
       const isLarge = trade.usd >= WHALE_USD || trade.eth >= WHALE_ETH;
@@ -595,7 +715,7 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
       if (isLarge) {
         return {
           ...trade,
-          whale: { type: 'large_buy', context: isNew ? 'new coin' : undefined } as const,
+          whale: { type: 'large_buy', context: isNew ? 'new coin' : undefined, pct } as const,
         };
       }
       return trade;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 interface TokenImageProps {
   src?: string;
@@ -10,32 +10,45 @@ interface TokenImageProps {
   priority?: boolean;
 }
 
+// Deterministic, crisp SVG fallback so every token has a visual even when no
+// upstream image exists. Hash the address/ticker into a gradient + initials.
+function fallbackSvg(seed: string, label: string): string {
+  const hash = (s: string) => {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h << 5) - h + s.charCodeAt(i);
+    return Math.abs(h);
+  };
+  const h = hash(seed);
+  const hue1 = h % 360;
+  const hue2 = (hue1 + 40 + ((h >> 8) % 60)) % 360;
+  const sat = 70 + (h % 20);
+  const light1 = 35 + (h % 15);
+  const light2 = 45 + ((h >> 4) % 20);
+  const c1 = `hsl(${hue1} ${sat}% ${light1}%)`;
+  const c2 = `hsl(${hue2} ${sat}% ${light2}%)`;
+  const text = label.slice(0, 2).toUpperCase();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="${c1}"/><stop offset="100%" stop-color="${c2}"/></linearGradient></defs><rect width="128" height="128" fill="url(#g)"/><text x="64" y="76" font-size="52" font-weight="800" font-family="system-ui,sans-serif" text-anchor="middle" fill="rgba(0,0,0,0.55)">${text}</text></svg>`;
+  return `data:image/svg+xml;base64,${typeof window !== 'undefined' ? btoa(svg) : Buffer.from(svg).toString('base64')}`;
+}
+
 // Images arrive already routed through /api/img (server-side proxy handles IPFS
 // gateway fallback + edge caching), so the client just renders or falls back.
 export function TokenImage({ src, alt, className, fallbackClassName, priority }: TokenImageProps) {
   const [error, setError] = useState(false);
+  const seed = useMemo(() => src || alt || Math.random().toString(), [src, alt]);
+  const fallback = useMemo(() => fallbackSvg(seed, alt), [seed, alt]);
 
-  if (!src || error) {
-    return (
-      <div
-        className={`flex h-full w-full items-center justify-center bg-gradient-to-br from-surface-2 to-surface-3 ${fallbackClassName ?? ''}`}
-      >
-        <span className="font-extrabold tracking-tight text-ink-3/20">
-          {alt.slice(0, 1).toUpperCase()}
-        </span>
-      </div>
-    );
-  }
+  const imgSrc = src && !error ? src : fallback;
 
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={src}
+      src={imgSrc}
       alt={alt}
       loading={priority ? 'eager' : 'lazy'}
       fetchPriority={priority ? 'high' : 'auto'}
       decoding="async"
-      className={className}
+      className={`${className ?? ''} ${!src || error ? (fallbackClassName ?? '') : ''}`}
       onError={() => setError(true)}
     />
   );
