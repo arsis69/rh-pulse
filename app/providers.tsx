@@ -10,7 +10,7 @@ import '@rainbow-me/rainbowkit/styles.css';
 
 const config = getDefaultConfig({
   appName: 'RH Pulse',
-  projectId: 'YOUR_WALLETCONNECT_PROJECT_ID', // Get free one at cloud.walletconnect.com
+  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'rh-pulse-dev', // Get free one at cloud.walletconnect.com
   chains: [robinhoodChain],
   ssr: true,
 });

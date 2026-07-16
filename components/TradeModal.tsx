@@ -2,9 +2,10 @@
 
 import { Token } from '@/lib/types';
 import { X } from 'lucide-react';
-import { useState } from 'react';
-import { useWriteContract, useAccount } from 'wagmi';
-import { parseEther } from 'viem';
+import { useEffect, useState } from 'react';
+import { useWriteContract, useAccount, usePublicClient } from 'wagmi';
+import { parseEther, zeroAddress } from 'viem';
+import { flapPortalAddress } from '@/lib/chain';
 
 interface TradeModalProps {
   token: Token | null;
@@ -12,64 +13,110 @@ interface TradeModalProps {
   onClose: () => void;
 }
 
-// TODO: Replace with actual Uniswap V3 Router (or launchpad router) address on Robinhood Chain
-const SWAP_ROUTER_ADDRESS = '0x0000000000000000000000000000000000000000' as const; // Placeholder - update with real address
-
-// Basic ABI for swapExactETHForTokens (Uniswap V2 style - adjust for V3 if needed)
-const swapAbi = [
+// Flap Portal trade entrypoint (proxy at flapPortalAddress, impl verified on Blockscout)
+const portalAbi = [
   {
     inputs: [
-      { internalType: 'uint256', name: 'amountOutMin', type: 'uint256' },
-      { internalType: 'address[]', name: 'path', type: 'address[]' },
-      { internalType: 'address', name: 'to', type: 'address' },
-      { internalType: 'uint256', name: 'deadline', type: 'uint256' },
+      {
+        components: [
+          { internalType: 'address', name: 'inputToken', type: 'address' },
+          { internalType: 'address', name: 'outputToken', type: 'address' },
+          { internalType: 'uint256', name: 'inputAmount', type: 'uint256' },
+          { internalType: 'uint256', name: 'minOutputAmount', type: 'uint256' },
+          { internalType: 'bytes', name: 'permitData', type: 'bytes' },
+        ],
+        internalType: 'struct IPortalTradeV2.ExactInputParams',
+        name: 'params',
+        type: 'tuple',
+      },
     ],
-    name: 'swapExactETHForTokens',
-    outputs: [{ internalType: 'uint256[]', name: 'amounts', type: 'uint256[]' }],
+    name: 'swapExactInput',
+    outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }],
     stateMutability: 'payable',
     type: 'function',
   },
 ] as const;
 
+const SLIPPAGE_BPS = 1000n; // 10%
+
 export function TradeModal({ token, isOpen, onClose }: TradeModalProps) {
   const [amount, setAmount] = useState('0.1');
+  const [quote, setQuote] = useState<bigint | null>(null);
+  const [quoteError, setQuoteError] = useState(false);
   const { address } = useAccount();
+  const publicClient = usePublicClient();
   const { writeContract, isPending, isSuccess } = useWriteContract();
+
+  // Live quote: simulate the swap to see how many tokens the ETH buys
+  useEffect(() => {
+    if (!isOpen || !token || !publicClient) return;
+    let cancelled = false;
+    setQuote(null);
+    setQuoteError(false);
+    const run = async () => {
+      try {
+        const value = parseEther(amount || '0');
+        if (value === 0n) return;
+        const { result } = await publicClient.simulateContract({
+          address: flapPortalAddress,
+          abi: portalAbi,
+          functionName: 'swapExactInput',
+          args: [
+            {
+              inputToken: zeroAddress,
+              outputToken: token.address as `0x${string}`,
+              inputAmount: value,
+              minOutputAmount: 0n,
+              permitData: '0x',
+            },
+          ],
+          value,
+          account: address ?? zeroAddress,
+        });
+        if (!cancelled) setQuote(result);
+      } catch {
+        if (!cancelled) setQuoteError(true);
+      }
+    };
+    const t = setTimeout(run, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [amount, isOpen, token, publicClient, address]);
 
   if (!isOpen || !token) return null;
 
-  const handleRealBuy = async () => {
+  const handleBuy = async () => {
     if (!address) {
       alert('Please connect your wallet first');
       return;
     }
-
     try {
-      // Example path: WETH -> Token (you need actual WETH and router on the chain)
-      const path = [
-        '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // Example WETH (update for Robinhood Chain if different)
-        token.address as `0x${string}`,
-      ];
-
+      const value = parseEther(amount);
+      const minOut = quote ? (quote * (10000n - SLIPPAGE_BPS)) / 10000n : 0n;
       await writeContract({
-        address: SWAP_ROUTER_ADDRESS,
-        abi: swapAbi,
-        functionName: 'swapExactETHForTokens',
+        address: flapPortalAddress,
+        abi: portalAbi,
+        functionName: 'swapExactInput',
         args: [
-          0n, // amountOutMin (set slippage later)
-          path,
-          address,
-          BigInt(Math.floor(Date.now() / 1000) + 60 * 20), // 20 min deadline
+          {
+            inputToken: zeroAddress,
+            outputToken: token.address as `0x${string}`,
+            inputAmount: value,
+            minOutputAmount: minOut,
+            permitData: '0x',
+          },
         ],
-        value: parseEther(amount),
+        value,
       });
-
-      // Success will be handled by isSuccess or toast in real app
     } catch (error) {
       console.error('Swap failed:', error);
-      alert('Swap failed. Check console and update router address.');
+      alert('Swap failed. Check console for details.');
     }
   };
+
+  const estTokens = quote !== null ? Number(quote) / 1e18 : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -109,25 +156,37 @@ export function TradeModal({ token, isOpen, onClose }: TradeModalProps) {
             </div>
           </div>
 
-          {/* Quote (mock for now) */}
+          {/* Live quote via portal simulation */}
           <div className="bg-[#F8FAFC] rounded-2xl p-4 text-sm">
             <div className="flex justify-between mb-1">
               <span className="text-[#64748B]">You receive (est.)</span>
-              <span className="font-mono font-medium">~{(parseFloat(amount) * 12400).toFixed(0)} {token.ticker}</span>
+              <span className="font-mono font-medium">
+                {estTokens !== null
+                  ? `~${estTokens.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${token.ticker}`
+                  : quoteError
+                    ? 'Quote unavailable'
+                    : 'Fetching quote…'}
+              </span>
             </div>
-            <div className="text-xs text-[#94A3B8]">Price impact: &lt;0.5% • Slippage: 1%</div>
+            <div className="text-xs text-[#94A3B8]">Slippage: 10% max • Flap bonding curve</div>
           </div>
+
+          {isSuccess && (
+            <div className="bg-emerald-50 text-emerald-700 rounded-2xl p-3 text-sm font-medium">
+              Transaction submitted ✓
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="px-6 py-5 border-t flex gap-3">
-          <button 
+          <button
             onClick={onClose}
             className="flex-1 py-3 rounded-2xl border border-[#E2E8F0] font-medium hover:bg-[#F8FAFC]"
           >
             Cancel
           </button>
-          <button 
+          <button
             onClick={handleBuy}
             disabled={isPending}
             className="flex-1 py-3 rounded-2xl bg-[#0F172A] text-white font-medium hover:bg-black active:bg-[#111827] disabled:opacity-70"
