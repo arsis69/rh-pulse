@@ -18,6 +18,10 @@ export const IMG_ALLOWED_HOSTS = new Set([
   'r2-uploads.imageupper.com',
   'i.postimg.cc',
   'postimg.cc',
+  's3.ap-southeast-1.amazonaws.com', // virtuals protocol CDN
+  'cdn.charms.ai', // clanker deployments
+  'imagedelivery.net',
+  'metadata.j7tracker.io', // pons image host
 ]);
 
 // Working public gateways, fastest first (cloudflare-ipfs.com is dead, pinata rate-limits).

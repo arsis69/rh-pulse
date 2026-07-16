@@ -5,6 +5,7 @@ import { Token, TradeEvent, FeedPayload, LLMAnalysis } from '@/lib/types';
 import { fetchNewPools, fetchDexPools, fetchTokenInfo, GTTokenInfo } from '@/lib/gecko';
 import { fetchDexScreenerTokenInfo, fetchDexScreenerLatestProfiles } from '@/lib/dexscreener';
 import { fetchOnChainMeta } from '@/lib/onchainMeta';
+import { fetchVirtualsMeta, fetchClankerRecent, LaunchpadMeta } from '@/lib/launchpadMeta';
 import { refreshFlap, FlapSnapshot } from '@/lib/flap';
 import { refreshKlik, KlikSnapshot } from '@/lib/klik';
 import { analyzeToken } from '@/lib/llm';
@@ -79,6 +80,13 @@ interface CacheState {
   dsProfilesAt: number;
   onchainMeta: Map<string, { imageUrl?: string; description?: string; twitter?: string; telegram?: string; website?: string } | null>;
   onchainMetaQueue: string[];
+  // launchpad-native metadata (fastest source): virtuals per-token API + clanker rolling list
+  virtualsMeta: Map<string, LaunchpadMeta | null>; // null = asked, not there yet
+  virtualsNegAt: Map<string, number>;
+  virtualsQueue: string[];
+  clankerMap: Map<string, LaunchpadMeta>;
+  clankerAt: number;
+  infoNegAt: Map<string, number>; // GT/DS "no info" answers expire — young tokens get re-checked
 }
 
 const state: CacheState = {
@@ -111,6 +119,12 @@ const state: CacheState = {
   dsProfilesAt: 0,
   onchainMeta: new Map(),
   onchainMetaQueue: [],
+  virtualsMeta: new Map(),
+  virtualsNegAt: new Map(),
+  virtualsQueue: [],
+  clankerMap: new Map(),
+  clankerAt: 0,
+  infoNegAt: new Map(),
 };
 
 async function refreshEth() {
@@ -348,6 +362,43 @@ async function drainChainMetaQueue() {
   );
 }
 
+// virtuals' own API is the only place their art exists in the first minutes —
+// look tokens up one by one, retry misses (API can lag creation by a moment)
+const VIRTUALS_PER_DRAIN = 2;
+async function drainVirtualsQueue() {
+  const batch = state.virtualsQueue.splice(0, VIRTUALS_PER_DRAIN);
+  await Promise.all(
+    batch.map(async (addr) => {
+      const meta = await fetchVirtualsMeta(addr);
+      state.virtualsMeta.set(addr, meta);
+      if (!meta) {
+        state.virtualsNegAt.set(addr, Date.now());
+        return;
+      }
+      const up = normalizeUpstream(meta.imageUrl);
+      if (up) void getImage(up, 256); // warm immediately
+    }),
+  );
+}
+
+const CLANKER_TTL = 90_000;
+async function refreshClankerMap() {
+  if (Date.now() - state.clankerAt < CLANKER_TTL) return;
+  state.clankerAt = Date.now();
+  try {
+    const recent = await fetchClankerRecent(2);
+    for (const [addr, meta] of recent) state.clankerMap.set(addr, meta);
+    // keep bounded — clanker launches are sparse enough that 400 covers days
+    while (state.clankerMap.size > 400) {
+      const oldest = state.clankerMap.keys().next().value;
+      if (oldest === undefined) break;
+      state.clankerMap.delete(oldest);
+    }
+  } catch {
+    /* retry next TTL */
+  }
+}
+
 // Bulk-load existing analyses from Supabase for tokens we haven't seen yet —
 // one query per cycle instead of one lookup per token.
 let analysesLoadAt = 0;
@@ -546,7 +597,36 @@ async function mergeTokens(): Promise<Token[]> {
   // fill missing art from DexScreener before proxying
   await enrichDexScreenerInfo(tokens);
 
+  const nowSec = Math.floor(Date.now() / 1000);
   for (const t of tokens) {
+    // launchpad-native metadata — the only source with art in the first minutes
+    if (t.launchpad === 'virtuals') {
+      const vm = state.virtualsMeta.get(t.id);
+      if (vm) {
+        t.imageUrl = t.imageUrl ?? vm.imageUrl;
+        t.twitter = t.twitter ?? vm.twitter;
+        t.telegram = t.telegram ?? vm.telegram;
+        t.website = t.website ?? vm.website;
+        t.description = t.description ?? vm.description;
+      } else if (vm === undefined && !state.virtualsQueue.includes(t.id)) {
+        state.virtualsQueue.push(t.id);
+      } else if (vm === null && t.createdAt > nowSec - 6 * 3600) {
+        // their API can lag creation — retry young tokens every couple minutes
+        const at = state.virtualsNegAt.get(t.id) ?? 0;
+        if (Date.now() - at > 120_000 && !state.virtualsQueue.includes(t.id)) {
+          state.virtualsMeta.delete(t.id);
+          state.virtualsQueue.push(t.id);
+        }
+      }
+    }
+    const ck = state.clankerMap.get(t.id);
+    if (ck) {
+      t.imageUrl = t.imageUrl ?? ck.imageUrl;
+      t.twitter = t.twitter ?? ck.twitter;
+      t.website = t.website ?? ck.website;
+      t.description = t.description ?? ck.description;
+    }
+
     // GT token info (images/socials/gt_score for DEX tokens)
     const info = state.info.get(t.id);
     if (info) {
@@ -563,6 +643,16 @@ async function mergeTokens(): Promise<Token[]> {
       }
     } else if (info === undefined && t.source === 'gecko' && !state.infoQueue.includes(t.id)) {
       state.infoQueue.push(t.id);
+    } else if (info === null && t.createdAt > nowSec - 6 * 3600) {
+      // "no info" answers must expire for young tokens: GT/DS often publish an
+      // image minutes AFTER our first ask — permanent caching meant those
+      // images never arrived at all (this was bankr/virtuals' biggest gap)
+      const at = state.infoNegAt.get(t.id) ?? 0;
+      if (Date.now() - at > 120_000 && !state.infoQueue.includes(t.id)) {
+        state.info.delete(t.id);
+        state.infoNegAt.set(t.id, Date.now());
+        state.infoQueue.push(t.id);
+      }
     }
 
     // IPFS metadata (images/socials for flap curve tokens)
@@ -656,7 +746,14 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   // burns the GT/LLM budget (feed reads stay cheap under load).
   if (Date.now() - state.drainAt >= DRAIN_MIN_INTERVAL) {
     state.drainAt = Date.now();
-    await Promise.all([drainInfoQueue(), drainIpfsQueue(), drainOnchainMetaQueue(), drainChainMetaQueue()]);
+    await Promise.all([
+      drainInfoQueue(),
+      drainIpfsQueue(),
+      drainOnchainMetaQueue(),
+      drainChainMetaQueue(),
+      drainVirtualsQueue(),
+      refreshClankerMap(),
+    ]);
     await refreshDexScreenerProfiles();
     await loadKnownAnalyses(tokens);
     tokens = (await mergeTokens()).filter((t) => !isBlacklistedToken(t.ticker)); // re-merge so fresh enrichment attaches
