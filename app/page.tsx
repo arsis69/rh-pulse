@@ -90,7 +90,7 @@ export default function RHPulse() {
                 <div className="mt-1 text-[13px] text-ink-3">Try a different filter or search term.</div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(220px,1fr))]">
                 <AnimatePresence mode="popLayout">
                   {filtered.map((token, i) => (
                     <motion.div
