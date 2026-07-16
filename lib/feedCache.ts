@@ -3,20 +3,29 @@
 // Module-level cache keeps GeckoTerminal within its ~30 req/min budget regardless of viewers.
 import { Token, TradeEvent, FeedPayload, LLMAnalysis } from '@/lib/types';
 import { fetchNewPools, fetchDexPools, fetchTokenInfo, GTTokenInfo } from '@/lib/gecko';
+import { fetchDexScreenerTokenInfo } from '@/lib/dexscreener';
 import { refreshFlap, FlapSnapshot } from '@/lib/flap';
 import { refreshKlik, KlikSnapshot } from '@/lib/klik';
 import { analyzeToken } from '@/lib/llm';
 import { getAnalysis, saveAnalysis } from '@/lib/supabase';
+import { isBlacklistedToken, computeTrustScore, applyActivityBoost } from '@/lib/score';
+import { getSmartMoneySet } from '@/lib/smartMoney';
 
-const GECKO_TTL = 10_000;
-const DEX_TTL = 45_000; // per-dex top-up (virtuals) changes slowly
+const GECKO_TTL = 30_000; // slow down to stay inside GT ~30 req/min free tier
+const DEX_TTL = 60_000; // per-dex top-up (virtuals/bankr/pons) changes slowly
 const CHAIN_TTL = 6_000;
 const ETH_TTL = 60_000;
 const INFO_PER_REFRESH = 3;
-const IPFS_PER_REFRESH = 4;
+const IPFS_PER_REFRESH = 16;
 const CHAIN_META_PER_REFRESH = 5; // Blockscout is generous; supply+holders lookups
 const MAX_TOKENS = 60;
-const IPFS_GATEWAYS = ['https://ipfs.io/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
+const IPFS_GATEWAYS = [
+  'https://gateway.pinata.cloud/ipfs/',
+  'https://cloudflare-ipfs.com/ipfs/',
+  'https://nftstorage.link/ipfs/',
+  'https://ipfs.io/ipfs/',
+  'https://dweb.link/ipfs/',
+];
 
 interface IpfsMeta {
   imageUrl?: string;
@@ -105,7 +114,16 @@ async function refreshDexTopUps() {
   state.dexAt = Date.now();
   try {
     // launchpads too quiet for the network-wide newest list
-    state.dexTokens = await fetchDexPools('virtuals-robinhood');
+    const [virtuals, bankr, pons] = await Promise.allSettled([
+      fetchDexPools('virtuals-robinhood'),
+      fetchDexPools('bankr-robinhood'),
+      fetchDexPools('pons-dot-family'),
+    ]);
+    const all: Token[] = [];
+    if (virtuals.status === 'fulfilled') all.push(...virtuals.value);
+    if (bankr.status === 'fulfilled') all.push(...bankr.value);
+    if (pons.status === 'fulfilled') all.push(...pons.value);
+    state.dexTokens = all;
   } catch {
     /* keep stale */
   }
@@ -129,10 +147,28 @@ async function refreshChain() {
   return state.chainInflight;
 }
 
+function attachScore(t: Token) {
+  if (t.score !== undefined) return;
+  t.score = computeTrustScore(t);
+  t.scoreSource = 'heuristic';
+}
+
 async function drainInfoQueue() {
-  const batch = state.infoQueue.splice(0, INFO_PER_REFRESH);
-  for (const addr of batch) {
-    if (state.info.has(addr)) continue;
+  // Prefer DexScreener batch calls: one request covers up to 30 tokens and does
+  // not count against GeckoTerminal's tight free-tier rate limit.
+  const batch = state.infoQueue.splice(0, Math.max(INFO_PER_REFRESH, state.infoQueue.length));
+  const missing = batch.filter((addr) => !state.info.has(addr));
+  if (missing.length === 0) return;
+
+  const ds = await fetchDexScreenerTokenInfo(missing);
+  for (const [addr, info] of ds) {
+    state.info.set(addr, Object.keys(info).length ? info : null);
+  }
+
+  // Fallback to GeckoTerminal for tokens DexScreener doesn't know yet, but keep
+  // it small to avoid blowing the rate limit.
+  const fallback = missing.filter((addr) => !ds.has(addr)).slice(0, 2);
+  for (const addr of fallback) {
     const info = await fetchTokenInfo(addr);
     if (info !== null) state.info.set(addr, Object.keys(info).length ? info : null);
   }
@@ -148,20 +184,24 @@ async function drainIpfsQueue() {
   await Promise.all(
     batch.map(async ({ addr, cid }) => {
       if (state.ipfs.has(addr)) return;
-      try {
-        const res = await fetch(ipfsUrl(cid), { signal: AbortSignal.timeout(6_000), cache: 'no-store' });
-        if (!res.ok) throw new Error(String(res.status));
-        const m = await res.json();
-        state.ipfs.set(addr, {
-          imageUrl: m.image ? ipfsUrl(String(m.image)) : undefined,
-          twitter: m.twitter || undefined,
-          telegram: m.telegram || undefined,
-          website: m.website || undefined,
-          description: m.description || undefined,
-        });
-      } catch {
-        state.ipfs.set(addr, null); // don't retry a dead CID every cycle
+      for (const gateway of IPFS_GATEWAYS) {
+        try {
+          const res = await fetch(ipfsUrl(cid, gateway), { signal: AbortSignal.timeout(6_000), cache: 'no-store' });
+          if (!res.ok) throw new Error(String(res.status));
+          const m = await res.json();
+          state.ipfs.set(addr, {
+            imageUrl: m.image ? ipfsUrl(String(m.image), gateway) : undefined,
+            twitter: m.twitter || undefined,
+            telegram: m.telegram || undefined,
+            website: m.website || undefined,
+            description: m.description || undefined,
+          });
+          return;
+        } catch {
+          /* try next gateway */
+        }
       }
+      state.ipfs.set(addr, null); // all gateways failed — don't retry every cycle
     }),
   );
 }
@@ -270,6 +310,7 @@ function mergeTokens(): Token[] {
         mcap: 0,
         volume24h: 0,
         holders: l.holders,
+        supply: l.supply,
         imageUrl: l.imageUrl,
         hasX: false,
         isCurve: false,
@@ -294,6 +335,7 @@ function mergeTokens(): Token[] {
       isCurve: false,
       imageUrl: g.imageUrl ?? existing?.imageUrl,
       holders: existing?.holders,
+      supply: existing?.supply ?? g.supply,
       metaCid: existing?.metaCid,
     });
   }
@@ -360,6 +402,9 @@ function mergeTokens(): Token[] {
 
     t.hasX = Boolean(t.twitter);
 
+    // fallback heuristic score when no GT score or LLM analysis exists
+    attachScore(t);
+
     // attach AI analysis
     const a = state.analyses.get(t.id);
     if (a) {
@@ -377,15 +422,54 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   await Promise.all([drainInfoQueue(), drainIpfsQueue(), drainChainMetaQueue()]);
 
   let tokens = mergeTokens();
+  tokens = tokens.filter((t) => !isBlacklistedToken(t.ticker));
   await loadKnownAnalyses(tokens);
-  tokens = mergeTokens(); // re-merge so freshly loaded analyses attach
+  tokens = mergeTokens().filter((t) => !isBlacklistedToken(t.ticker)); // re-merge so freshly loaded analyses attach
   kickAnalyzeDrip(tokens);
 
-  const activity: TradeEvent[] = [...state.flap.activity, ...state.klik.activity]
-    .sort((a, b) => b.ts - a.ts)
-    .slice(0, 30);
+  const [smartMoney] = await Promise.allSettled([getSmartMoneySet()]);
+  const smartMoneySet = smartMoney.status === 'fulfilled' ? smartMoney.value : new Set<string>();
 
   const hourAgo = Date.now() / 1000 - 3600;
+  const activity: TradeEvent[] = [...state.flap.activity, ...state.klik.activity]
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 30)
+    .map((trade) => {
+      if (trade.whale) return trade;
+      const t = tokens.find((x) => x.id === trade.token.toLowerCase());
+
+      // smart money = one of the top 30 holders of a top-30 coin
+      const buyer = trade.address?.toLowerCase();
+      if (buyer && smartMoneySet.has(buyer)) {
+        return { ...trade, whale: { type: 'top_holder', context: 'smart money' } as const };
+      }
+
+      // whale = buy > 1% of total supply
+      const isWhaleBuy =
+        trade.side === 'buy' &&
+        t &&
+        t.supply &&
+        t.supply > 0 &&
+        trade.amount !== undefined &&
+        trade.amount > t.supply * 0.01;
+      if (isWhaleBuy) {
+        return { ...trade, whale: { type: 'large_buy', context: '1% supply' } as const };
+      }
+
+      const isLarge = trade.usd >= 1000 || trade.eth >= 0.5;
+      const isNew = t && t.createdAt >= hourAgo;
+      if (isLarge) {
+        return {
+          ...trade,
+          whale: { type: 'large_buy', context: isNew ? 'new coin' : undefined } as const,
+        };
+      }
+      return trade;
+    });
+
+  const nowSec = Date.now() / 1000;
+  for (const t of tokens) applyActivityBoost(t, activity, nowSec);
+
   const launches1h =
     state.flap.tokens.filter((t) => t.createdAt >= hourAgo).length +
     state.klik.launches.filter((l) => l.createdAt >= hourAgo).length +

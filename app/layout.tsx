@@ -1,16 +1,16 @@
 import type { Metadata } from "next";
-import { Inter_Tight, Geist_Mono } from "next/font/google";
+import { Merriweather_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 
-const interTight = Inter_Tight({
-  variable: "--font-inter-tight",
+const merriweatherSans = Merriweather_Sans({
+  variable: "--font-sans",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+  weight: ["400", "500", "600", "700"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-mono",
   subsets: ["latin"],
   weight: ["400", "500", "600"],
 });
@@ -26,9 +26,11 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${interTight.variable} ${geistMono.variable} h-full antialiased`}>
-      <body className="min-h-full">
-        <Providers>{children}</Providers>
+    <html lang="en" className={`${merriweatherSans.variable} ${jetbrainsMono.variable} h-full antialiased`}>
+      <body className="bg-glow noise min-h-full">
+        <div className="relative z-10 min-h-full">
+          <Providers>{children}</Providers>
+        </div>
       </body>
     </html>
   );

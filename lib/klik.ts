@@ -20,6 +20,8 @@ export interface KlikLaunch {
   ticker: string;
   createdAt: number;
   holders?: number;
+  supply?: number; // whole tokens
+  decimals?: number;
   imageUrl?: string;
 }
 
@@ -50,15 +52,20 @@ async function getFactoryLogs(topic0: string, fromBlock: number, toBlock: number
   return Array.isArray(json.result) ? json.result : [];
 }
 
-async function fetchTokenMeta(address: string): Promise<{ name: string; ticker: string; holders?: number; imageUrl?: string } | null> {
+async function fetchTokenMeta(address: string): Promise<{ name: string; ticker: string; holders?: number; supply?: number; decimals?: number; imageUrl?: string } | null> {
   try {
     const res = await fetch(`${EXPLORER_V2}/tokens/${address}`, { cache: 'no-store' });
     if (!res.ok) return null;
     const t = await res.json();
+    const decimals = t.decimals ? parseInt(t.decimals, 10) : 18;
+    const totalSupply = t.total_supply ? BigInt(t.total_supply) : undefined;
+    const supply = totalSupply ? Number(totalSupply / BigInt(10 ** Math.max(0, decimals))) : undefined;
     return {
       name: t.name || 'Unknown',
       ticker: t.symbol || '???',
       holders: t.holders_count ? parseInt(t.holders_count) : undefined,
+      supply,
+      decimals,
       imageUrl: t.icon_url || undefined,
     };
   } catch {
@@ -92,6 +99,8 @@ export async function refreshKlik(ethUsd: number): Promise<KlikSnapshot> {
         ticker: meta?.ticker ?? '???',
         createdAt: ts,
         holders: meta?.holders,
+        supply: meta?.supply,
+        decimals: meta?.decimals,
         imageUrl: meta?.imageUrl,
       });
     }
@@ -99,16 +108,23 @@ export async function refreshKlik(ethUsd: number): Promise<KlikSnapshot> {
       // TokenPurchased(address buyer, address tokenOut, uint256 ethSpent, uint256 tokensReceived)
       try {
         const data = log.data.replace(/^0x/, '');
+        const buyer = ('0x' + data.slice(24, 64)).toLowerCase();
         const tokenOut = ('0x' + data.slice(64 + 24, 128)).toLowerCase();
         const eth = Number(BigInt('0x' + data.slice(128, 192))) / 1e18;
+        const tokensReceived = BigInt('0x' + data.slice(192, 256));
+        const launch = launches.get(tokenOut);
+        const decimals = launch?.decimals ?? 18;
+        const amount = Number(tokensReceived / BigInt(10 ** Math.max(0, decimals)));
         const ts = log.timeStamp ? parseInt(log.timeStamp, 16) : Math.floor(Date.now() / 1000);
         activity.push({
           ts,
           token: tokenOut,
-          ticker: launches.get(tokenOut)?.ticker,
+          address: buyer,
+          ticker: launch?.ticker,
           side: 'buy',
           eth,
           usd: eth * ethUsd,
+          amount,
         });
       } catch {
         /* skip */

@@ -72,11 +72,20 @@ function decode(log: RawLog) {
 function applyTrade(log: RawLog, side: 'buy' | 'sell', ethUsd: number) {
   try {
     const { args } = decode(log) as unknown as {
-      args: { ts: bigint; token: string; eth: bigint; postPrice: bigint };
+      args: {
+        ts: bigint;
+        token: string;
+        buyer?: string;
+        seller?: string;
+        amount: bigint;
+        eth: bigint;
+        postPrice: bigint;
+      };
     };
     const key = args.token.toLowerCase();
     const ts = Number(args.ts);
     const eth = Number(args.eth) / 1e18;
+    const amount = Number(args.amount) / 1e18; // Flap tokens are 18 decimals
     const st = curve.get(key);
     if (st) {
       if (st.firstPriceWei === 0n) st.firstPriceWei = args.postPrice;
@@ -87,7 +96,16 @@ function applyTrade(log: RawLog, side: 'buy' | 'sell', ethUsd: number) {
       st.trades.push({ ts, eth });
       st.netCurveEth += side === 'buy' ? eth : -eth;
     }
-    activity.push({ ts, token: args.token, ticker: st?.symbol, side, eth, usd: eth * ethUsd });
+    activity.push({
+      ts,
+      token: args.token,
+      address: (side === 'buy' ? args.buyer : args.seller)?.toLowerCase(),
+      ticker: st?.symbol,
+      side,
+      eth,
+      usd: eth * ethUsd,
+      amount,
+    });
   } catch {
     /* skip undecodable log */
   }

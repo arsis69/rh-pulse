@@ -13,9 +13,9 @@ export function dexToLaunchpad(dexId: string): Launchpad {
   return DEX_TO_LAUNCHPAD[dexId] || 'other';
 }
 
-export function dexTradeUrl(token: Token): string {
-  if (token.launchpad === 'pons') return `https://pons.family/launchpad/${token.address}`;
-  if (token.launchpad === 'klik') return `https://klik.fun`;
-  if (token.poolAddress) return `https://www.geckoterminal.com/robinhood/pools/${token.poolAddress}`;
-  return `https://www.geckoterminal.com/robinhood/pools?q=${token.address}`;
+export function gmgnUrl(token: Token): string {
+  const ref = process.env.NEXT_PUBLIC_GMGN_REF_CODE || 'AJb4ju9l';
+  // GMGN token pages on Robinhood look like /robinhood/token/<address>
+  // We append the ref code as a query param; if GMGN ignores it there is no harm.
+  return `https://gmgn.ai/robinhood/token/${token.address}?ref=${encodeURIComponent(ref)}`;
 }

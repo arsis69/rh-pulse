@@ -24,3 +24,8 @@ export function fmtEth(v: number): string {
 export function shortAddr(a: string): string {
   return `${a.slice(0, 6)}…${a.slice(-4)}`;
 }
+
+// Rough visual progress for bonding-curve tokens. Replace with real target when available.
+export function curvePct(liquidity: number): number {
+  return Math.min(100, Math.max(0, (liquidity / 60_000) * 100));
+}

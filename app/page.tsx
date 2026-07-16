@@ -1,16 +1,20 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AnimatePresence } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Search } from 'lucide-react';
-import { Launchpad } from '@/lib/types';
+import { Launchpad, Token } from '@/lib/types';
 import { usePulseStore } from '@/lib/store';
 import { useTokenFeed } from '@/hooks/useTokenFeed';
-import { launchpadColors } from '@/lib/chain';
 import { Nav } from '@/components/Nav';
 import { StatsBar } from '@/components/StatsBar';
 import { TickerTape } from '@/components/TickerTape';
-import { TokenCard } from '@/components/card/TokenCard';
+import { RecentTrades } from '@/components/RecentTrades';
+import { LaunchpadFilter } from '@/components/LaunchpadFilter';
+import { SortTabs } from '@/components/SortTabs';
+import { TokenDrawer } from '@/components/TokenDrawer';
+import { FeedCard } from '@/components/feed/FeedCard';
+import { FeedSkeleton } from '@/components/feed/FeedSkeleton';
 
 type SortKey = 'newest' | 'score' | 'liquidity' | 'volume';
 
@@ -20,8 +24,9 @@ export default function RHPulse() {
   const [search, setSearch] = useState('');
   const [launchpad, setLaunchpad] = useState<'all' | Launchpad>('all');
   const [sortBy, setSortBy] = useState<SortKey>('newest');
-    // live-ticking clock for ages + NEW badges
+  const [selectedToken, setSelectedToken] = useState<Token | null>(null);
   const [now, setNow] = useState(() => Date.now());
+
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -52,83 +57,77 @@ export default function RHPulse() {
   return (
     <div className="min-h-screen">
       <Nav />
-      <TickerTape />
-      <StatsBar />
+      <TickerTape onSelectToken={setSelectedToken} />
+      <StatsBar onSelectToken={setSelectedToken} />
 
-      {/* controls */}
-      <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-2 px-4 pb-4 sm:px-6">
-        <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search ticker, name, address…"
-            className="w-full rounded-xl border border-edge bg-surface py-2.5 pl-9 pr-3 text-[14px] text-ink placeholder:text-ink-3"
-          />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          <FilterPill active={launchpad === 'all'} color="var(--color-pulse)" label="ALL" onClick={() => setLaunchpad('all')} />
-          {availableLaunchpads.map((l) => (
-            <FilterPill
-              key={l}
-              active={launchpad === l}
-              color={launchpadColors[l]}
-              label={l.toUpperCase()}
-              onClick={() => setLaunchpad(l)}
-            />
-          ))}
-        </div>
-
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as SortKey)}
-          className="ml-auto rounded-xl border border-edge bg-surface px-3 py-2.5 text-[13px] text-ink-2"
-        >
-          <option value="newest">Newest first</option>
-          <option value="score">Top score</option>
-          <option value="liquidity">Top liquidity</option>
-          <option value="volume">Top volume</option>
-        </select>
-      </div>
-
-      {/* the card feed */}
       <main className="mx-auto max-w-[1500px] px-4 pb-16 sm:px-6">
-        {tokens.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-            <div className="animate-pulse text-[17px] font-semibold text-ink-2">Tuning into the chain…</div>
-            <div className="text-[13px] text-ink-3">first cards land in a few seconds</div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_300px]">
+          {/* feed area */}
+          <div className="min-w-0">
+            {/* controls */}
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+              <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search ticker, name, address…"
+                  className="w-full rounded-xl border border-edge bg-surface py-2.5 pl-9 pr-3 text-[14px] text-ink placeholder:text-ink-3"
+                />
+              </div>
+              <LaunchpadFilter value={launchpad} onChange={setLaunchpad} available={availableLaunchpads} />
+              <div className="sm:ml-auto">
+                <SortTabs value={sortBy} onChange={setSortBy} />
+              </div>
+            </div>
+
+            {/* tokens */}
+            {tokens.length === 0 ? (
+              <FeedSkeleton count={8} />
+            ) : filtered.length === 0 ? (
+              <div className="py-20 text-center">
+                <div className="text-[17px] font-semibold text-ink-2">No tokens match</div>
+                <div className="mt-1 text-[13px] text-ink-3">Try a different filter or search term.</div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <AnimatePresence mode="popLayout">
+                  {filtered.map((token) => (
+                    <motion.div
+                      key={token.id}
+                      layout
+                      initial={{ opacity: 0, y: -20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.96 }}
+                      transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+                    >
+                      <FeedCard token={token} now={now} onSelect={() => setSelectedToken(token)} />
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            <AnimatePresence mode="popLayout">
-              {filtered.map((token) => (
-                <TokenCard key={token.id} token={token} now={now} />
-              ))}
-            </AnimatePresence>
-          </div>
-        )}
+
+          {/* desktop sidebar */}
+          <aside className="hidden lg:block">
+            <div className="sticky top-20">
+              <RecentTrades now={now} />
+            </div>
+          </aside>
+        </div>
       </main>
 
       <footer className="border-t border-edge py-6 text-center text-[12px] text-ink-3">
         RH Pulse · live data from Robinhood Chain, GeckoTerminal &amp; launchpad contracts · not financial advice
       </footer>
-    </div>
-  );
-}
 
-function FilterPill({ active, color, label, onClick }: { active: boolean; color: string; label: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="rounded-full border px-3 py-1.5 text-[12px] font-semibold tracking-wide transition-colors"
-      style={
-        active
-          ? { color: '#0b0c0e', background: color, borderColor: color }
-          : { color, borderColor: `${color}55`, background: 'transparent' }
-      }
-    >
-      {label}
-    </button>
+      <TokenDrawer
+        key={selectedToken?.id ?? 'closed'}
+        token={selectedToken}
+        onClose={() => setSelectedToken(null)}
+        now={now}
+      />
+    </div>
   );
 }

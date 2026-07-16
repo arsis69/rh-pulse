@@ -44,20 +44,28 @@ export interface Token {
   description?: string;
   gtScore?: number; // GeckoTerminal trust score 0-100
   score?: number; // 0-100, only from a real source
-  scoreSource?: 'gt' | 'llm' | null;
+  scoreSource?: 'gt' | 'llm' | 'heuristic' | null;
   hasX: boolean;
   isCurve?: boolean; // still on bonding curve (pre-DEX)
   metaCid?: string; // IPFS metadata CID (flap launches)
   analysis?: LLMAnalysis; // attached server-side once analyzed
 }
 
+export interface WhaleMeta {
+  type: 'top_holder' | 'large_buy';
+  context?: string; // e.g. "top 30 $PEPE holder" or "new coin"
+}
+
 export interface TradeEvent {
   ts: number;
   token: string;
+  address?: string; // buyer/seller address when available
   ticker?: string;
   side: 'buy' | 'sell';
   eth: number;
   usd: number;
+  amount?: number; // token units bought/sold when available
+  whale?: WhaleMeta;
 }
 
 export interface FeedStats {
