@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Search } from 'lucide-react';
-import { Token, Launchpad } from '@/lib/types';
+import { Launchpad } from '@/lib/types';
 import { usePulseStore } from '@/lib/store';
 import { useTokenFeed } from '@/hooks/useTokenFeed';
 import { launchpadColors } from '@/lib/chain';
@@ -11,7 +11,6 @@ import { Nav } from '@/components/Nav';
 import { StatsBar } from '@/components/StatsBar';
 import { TickerTape } from '@/components/TickerTape';
 import { TokenCard } from '@/components/card/TokenCard';
-import { TradeModal } from '@/components/TradeModal';
 
 type SortKey = 'newest' | 'score' | 'liquidity' | 'volume';
 
@@ -21,10 +20,7 @@ export default function RHPulse() {
   const [search, setSearch] = useState('');
   const [launchpad, setLaunchpad] = useState<'all' | Launchpad>('all');
   const [sortBy, setSortBy] = useState<SortKey>('newest');
-  const [selectedToken, setSelectedToken] = useState<Token | null>(null);
-  const [isTradeOpen, setIsTradeOpen] = useState(false);
-
-  // live-ticking clock for ages + NEW badges
+    // live-ticking clock for ages + NEW badges
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -53,11 +49,6 @@ export default function RHPulse() {
       });
   }, [tokens, search, launchpad, sortBy]);
 
-  const handleTrade = (token: Token) => {
-    setSelectedToken(token);
-    setIsTradeOpen(true);
-  };
-
   return (
     <div className="min-h-screen">
       <Nav />
@@ -72,7 +63,7 @@ export default function RHPulse() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search ticker, name, address…"
-            className="w-full rounded-xl border border-edge bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-3"
+            className="w-full rounded-xl border border-edge bg-surface py-2.5 pl-9 pr-3 text-[14px] text-ink placeholder:text-ink-3"
           />
         </div>
 
@@ -92,7 +83,7 @@ export default function RHPulse() {
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as SortKey)}
-          className="ml-auto rounded-xl border border-edge bg-surface px-3 py-2 text-xs text-ink-2"
+          className="ml-auto rounded-xl border border-edge bg-surface px-3 py-2.5 text-[13px] text-ink-2"
         >
           <option value="newest">Newest first</option>
           <option value="score">Top score</option>
@@ -105,23 +96,21 @@ export default function RHPulse() {
       <main className="mx-auto max-w-[1500px] px-4 pb-16 sm:px-6">
         {tokens.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-            <div className="font-display animate-pulse text-sm tracking-widest text-ink-2">TUNING INTO THE CHAIN…</div>
-            <div className="text-xs text-ink-3">first cards land in a few seconds</div>
+            <div className="animate-pulse text-[17px] font-semibold text-ink-2">Tuning into the chain…</div>
+            <div className="text-[13px] text-ink-3">first cards land in a few seconds</div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             <AnimatePresence mode="popLayout">
               {filtered.map((token) => (
-                <TokenCard key={token.id} token={token} now={now} onTrade={handleTrade} />
+                <TokenCard key={token.id} token={token} now={now} />
               ))}
             </AnimatePresence>
           </div>
         )}
       </main>
 
-      <TradeModal token={selectedToken} isOpen={isTradeOpen} onClose={() => setIsTradeOpen(false)} />
-
-      <footer className="border-t border-edge py-6 text-center text-[10px] text-ink-3">
+      <footer className="border-t border-edge py-6 text-center text-[12px] text-ink-3">
         RH Pulse · live data from Robinhood Chain, GeckoTerminal &amp; launchpad contracts · not financial advice
       </footer>
     </div>
@@ -132,10 +121,10 @@ function FilterPill({ active, color, label, onClick }: { active: boolean; color:
   return (
     <button
       onClick={onClick}
-      className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors"
+      className="rounded-full border px-3 py-1.5 text-[12px] font-semibold tracking-wide transition-colors"
       style={
         active
-          ? { color: '#0a0b10', background: color, borderColor: color }
+          ? { color: '#0b0c0e', background: color, borderColor: color }
           : { color, borderColor: `${color}55`, background: 'transparent' }
       }
     >

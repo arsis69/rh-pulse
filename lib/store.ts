@@ -24,7 +24,7 @@ interface PulseState {
 export const usePulseStore = create<PulseState>((set, get) => ({
   tokens: [],
   activity: [],
-  stats: { launches24h: 0, totalVol24h: 0, ethUsd: 0 },
+  stats: { launches24h: 0, launches1h: 0, hottest: null, ethUsd: 0 },
   firstSeenAt: new Map(),
   analyses: new Map(),
   analysisPending: new Set(),
@@ -42,16 +42,20 @@ export const usePulseStore = create<PulseState>((set, get) => ({
         seen.set(t.id, seeded ? now : 0);
       }
     }
-    // apply cached LLM scores on top of feed data
+    // server attaches analyses to tokens; mirror them into the local map and
+    // apply any flip-fetched ones the server hasn't reflected yet
+    const merged = new Map(analyses);
+    for (const t of payload.tokens) if (t.analysis) merged.set(t.id, t.analysis);
     const tokens = payload.tokens.map((t) => {
-      const a = analyses.get(t.id);
-      return a ? { ...t, score: a.score, scoreSource: 'llm' as const } : t;
+      const a = merged.get(t.id);
+      return a ? { ...t, analysis: a, score: a.score, scoreSource: 'llm' as const } : t;
     });
     set({
       tokens,
       activity: payload.activity,
       stats: payload.stats,
       firstSeenAt: seen,
+      analyses: merged,
       seeded: true,
       isLive: true,
       lastUpdated: now,

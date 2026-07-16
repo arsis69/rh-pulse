@@ -49,11 +49,21 @@ function synthSparkline(pct: Record<string, string | null>): number[] {
 }
 
 export async function fetchNewPools(): Promise<Token[]> {
-  const res = await fetch(`${GT}/networks/${NETWORK}/new_pools?page=1&include=base_token`, {
+  return fetchPoolsFrom(`${GT}/networks/${NETWORK}/new_pools?page=1&include=base_token`);
+}
+
+// Per-dex pools: guarantees low-traffic launchpads (e.g. virtuals) stay represented
+// even when they don't crack the network-wide newest list.
+export async function fetchDexPools(dexId: string): Promise<Token[]> {
+  return fetchPoolsFrom(`${GT}/networks/${NETWORK}/dexes/${dexId}/pools?page=1&include=base_token`);
+}
+
+async function fetchPoolsFrom(url: string): Promise<Token[]> {
+  const res = await fetch(url, {
     headers: { accept: 'application/json' },
     cache: 'no-store',
   });
-  if (!res.ok) throw new Error(`GT new_pools ${res.status}`);
+  if (!res.ok) throw new Error(`GT pools ${res.status}`);
   const json = await res.json();
   const included: GTIncludedToken[] = json.included || [];
   const tokenById = new Map(included.map((t) => [t.id, t]));
@@ -79,6 +89,7 @@ export async function fetchNewPools(): Promise<Token[]> {
       mcap: num(a.market_cap_usd) || num(a.fdv_usd),
       volume24h: num(a.volume_usd?.h24),
       priceUsd: num(a.base_token_price_usd) || undefined,
+      priceChange24h: num(a.price_change_percentage?.h24),
       txns24h: a.transactions?.h24 ? a.transactions.h24.buys + a.transactions.h24.sells : undefined,
       sparkline: synthSparkline(a.price_change_percentage),
       imageUrl: base.attributes.image_url || undefined,

@@ -2,7 +2,7 @@
 import { Token, LLMAnalysis, ageMinutes } from '@/lib/types';
 
 const BASE_URL = 'https://madjames.bond/v1';
-const MODEL = 'grok-4.5';
+const MODEL = 'grok-4.5-low'; // low reasoning effort: fast + cheap, plenty for this
 
 export async function analyzeToken(token: Token, holders?: number): Promise<LLMAnalysis> {
   const apiKey = process.env.MADJAMES_API_KEY;
@@ -47,10 +47,12 @@ Reply with strict JSON:
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
-      max_tokens: 2000,
+      // generous cap: reasoning tokens count against it, and a truncated
+      // response means an empty content field → failed analysis
+      max_tokens: 10_000,
       temperature: 0.4,
     }),
-    signal: AbortSignal.timeout(45_000),
+    signal: AbortSignal.timeout(40_000),
   });
   if (!res.ok) throw new Error(`LLM ${res.status}`);
   const json = await res.json();

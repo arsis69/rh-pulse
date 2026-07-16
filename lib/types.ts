@@ -9,6 +9,14 @@ export type Launchpad =
   | 'klik'
   | 'other';
 
+export interface LLMAnalysis {
+  score: number;
+  risk: 'Low' | 'Medium' | 'High';
+  pros: string[];
+  cons: string[];
+  summary: string;
+}
+
 export interface Token {
   id: string; // lowercase token address
   address: string;
@@ -23,6 +31,7 @@ export interface Token {
   mcap: number; // USD (fdv fallback)
   volume24h: number; // USD
   priceUsd?: number;
+  priceChange24h?: number; // percent; curve tokens: change since first trade
   txns24h?: number;
   holders?: number;
   sparkline?: number[]; // relative price points, oldest → newest
@@ -37,6 +46,8 @@ export interface Token {
   scoreSource?: 'gt' | 'llm' | null;
   hasX: boolean;
   isCurve?: boolean; // still on bonding curve (pre-DEX)
+  metaCid?: string; // IPFS metadata CID (flap launches)
+  analysis?: LLMAnalysis; // attached server-side once analyzed
 }
 
 export interface TradeEvent {
@@ -50,7 +61,8 @@ export interface TradeEvent {
 
 export interface FeedStats {
   launches24h: number;
-  totalVol24h: number;
+  launches1h: number;
+  hottest: { ticker: string; volume24h: number; address: string } | null;
   ethUsd: number;
 }
 
@@ -59,14 +71,6 @@ export interface FeedPayload {
   activity: TradeEvent[];
   stats: FeedStats;
   serverTime: number;
-}
-
-export interface LLMAnalysis {
-  score: number;
-  risk: 'Low' | 'Medium' | 'High';
-  pros: string[];
-  cons: string[];
-  summary: string;
 }
 
 // age helper derived from createdAt so cards can tick live

@@ -30,8 +30,10 @@ interface CurveState {
   createdTs: number;
   name: string;
   symbol: string;
+  metaCid: string;
   lastTs: number;
   lastPriceWei: bigint;
+  firstPriceWei: bigint; // first observed trade price → "up since launch"
   volDayEth: number; // rolling, pruned by trade timestamps below
   trades: { ts: number; eth: number }[];
   netCurveEth: number;
@@ -77,6 +79,7 @@ function applyTrade(log: RawLog, side: 'buy' | 'sell', ethUsd: number) {
     const eth = Number(args.eth) / 1e18;
     const st = curve.get(key);
     if (st) {
+      if (st.firstPriceWei === 0n) st.firstPriceWei = args.postPrice;
       if (ts >= st.lastTs) {
         st.lastTs = ts;
         st.lastPriceWei = args.postPrice;
@@ -109,14 +112,16 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
     for (const log of created) {
       try {
         const { args } = decode(log) as unknown as {
-          args: { ts: bigint; token: string; name: string; symbol: string };
+          args: { ts: bigint; token: string; name: string; symbol: string; meta: string };
         };
         curve.set(args.token.toLowerCase(), {
           createdTs: Number(args.ts),
           name: args.name,
           symbol: args.symbol,
+          metaCid: args.meta,
           lastTs: 0,
           lastPriceWei: 0n,
+          firstPriceWei: 0n,
           volDayEth: 0,
           trades: [],
           netCurveEth: 0,
@@ -156,10 +161,15 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
       mcap: priceEth * TOKEN_SUPPLY * ethUsd,
       volume24h: volEth * ethUsd,
       priceUsd: priceEth * ethUsd || undefined,
+      priceChange24h:
+        st.firstPriceWei > 0n && st.lastPriceWei > 0n
+          ? (Number(st.lastPriceWei) / Number(st.firstPriceWei) - 1) * 100
+          : undefined,
       txns24h: st.trades.length,
       hasX: false,
       isCurve: true,
       scoreSource: null,
+      metaCid: st.metaCid || undefined,
     });
   }
   tokens.sort((a, b) => b.createdAt - a.createdAt);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { LLMAnalysis } from '@/lib/types';
-import { getCachedToken } from '@/lib/feedCache';
+import { getCachedToken, setAnalysisInCache } from '@/lib/feedCache';
 import { analyzeToken } from '@/lib/llm';
 import { getAnalysis, saveAnalysis } from '@/lib/supabase';
 
@@ -8,6 +8,36 @@ export const dynamic = 'force-dynamic';
 
 // one analysis per token globally: Supabase cache + in-flight dedupe
 const inflight = new Map<string, Promise<LLMAnalysis>>();
+
+async function buildFallbackToken(address: string) {
+  try {
+    const res = await fetch(`https://robinhoodchain.blockscout.com/api/v2/tokens/${address}`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return undefined;
+    const t = await res.json();
+    const holders = parseInt(t.holders_count);
+    const token: import('@/lib/types').Token = {
+      id: address,
+      address,
+      ticker: t.symbol || '???',
+      name: t.name || 'Unknown',
+      launchpad: 'other',
+      source: 'gecko',
+      createdAt: Math.floor(Date.now() / 1000),
+      liquidity: 0,
+      mcap: 0,
+      volume24h: 0,
+      holders: Number.isFinite(holders) ? holders : undefined,
+      hasX: false,
+      scoreSource: null,
+    };
+    return token;
+  } catch {
+    return undefined;
+  }
+}
 
 async function fetchHolders(address: string): Promise<number | undefined> {
   try {
@@ -45,13 +75,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'analysis failed' }, { status: 502 });
   }
 
-  const token = await getCachedToken(address);
-  if (!token) return NextResponse.json({ error: 'token not in live feed' }, { status: 404 });
+  // token may have scrolled out of the live feed — fall back to a minimal
+  // on-chain snapshot so analysis still works instead of 404ing
+  const token = (await getCachedToken(address)) ?? (await buildFallbackToken(address));
+  if (!token) return NextResponse.json({ error: 'unknown token' }, { status: 404 });
 
   const job = (async () => {
     const holders = token.holders ?? (await fetchHolders(address));
     const analysis = await analyzeToken(token, holders);
-    await saveAnalysis(address, analysis, 'grok-4.5');
+    setAnalysisInCache(address, analysis);
+    await saveAnalysis(address, analysis, 'grok-4.5-low');
     return analysis;
   })();
   inflight.set(address, job);

@@ -1,148 +1,140 @@
 'use client';
 
-import { Token, ageMinutes } from '@/lib/types';
+import { useState } from 'react';
+import { Token } from '@/lib/types';
 import { launchpadColors } from '@/lib/chain';
-import { getRarity, rarityStyles, fallbackArt } from '@/lib/rarity';
-import { fmtUsd, fmtAge } from '@/lib/format';
+import { getRarity, rarityStyles } from '@/lib/rarity';
+import { fmtUsd, fmtAge, shortAddr } from '@/lib/format';
 import { dexTradeUrl } from '@/lib/geckoShared';
 import { Sparkline } from './Sparkline';
-import { ArrowUpRight, RefreshCw, Users, Zap } from 'lucide-react';
+import { ArrowUpRight, Check, Copy, ScanSearch } from 'lucide-react';
 
 interface CardFrontProps {
   token: Token;
   now: number;
-  onTrade: (t: Token) => void;
   onFlip: () => void;
 }
 
-function ScoreChip({ token }: { token: Token }) {
-  if (token.score === undefined || token.scoreSource == null) {
-    return (
-      <span className="num rounded-full border border-edge px-2 py-0.5 text-[11px] text-ink-3" title="not scored yet">
-        —
-      </span>
-    );
-  }
-  const c = token.score >= 70 ? 'var(--color-up)' : token.score >= 45 ? '#eab308' : 'var(--color-down)';
+function CopyCA({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
   return (
-    <span
-      className="num rounded-full px-2 py-0.5 text-[11px] font-semibold"
-      style={{ color: c, border: `1px solid ${c}55`, background: `${'#000'}00` }}
-      title={token.scoreSource === 'llm' ? 'AI analysis score' : 'GeckoTerminal trust score'}
+    <button
+      onClick={() => {
+        navigator.clipboard?.writeText(address);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      title="Copy contract address"
+      className="num flex items-center gap-1.5 rounded-lg bg-surface-2 px-2.5 py-1.5 text-[12px] text-ink-2 transition-colors hover:text-ink"
     >
-      {token.score} {token.scoreSource === 'llm' ? '✦' : ''}
-    </span>
+      {shortAddr(address)}
+      {copied ? <Check className="h-3.5 w-3.5 text-up" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
   );
 }
 
-export function CardFront({ token, now, onTrade, onFlip }: CardFrontProps) {
-  const rarity = getRarity(token);
-  const rs = rarityStyles[rarity];
+export function CardFront({ token, now, onFlip }: CardFrontProps) {
+  const rs = rarityStyles[getRarity(token)];
   const lpColor = launchpadColors[token.launchpad] || launchpadColors.other;
-  const isFresh = ageMinutes(token, now) < 60;
 
   return (
     <div className="card-face absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-surface">
       {/* art */}
-      <div className="relative h-28 shrink-0 overflow-hidden" style={{ background: fallbackArt(token.address) }}>
+      <div className="relative h-36 shrink-0 overflow-hidden bg-surface-2">
         {token.imageUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={token.imageUrl}
             alt=""
+            loading="lazy"
             className="h-full w-full object-cover"
             onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
           />
         ) : (
-          <div className="font-display absolute inset-0 flex items-center justify-center text-4xl font-bold text-white/25">
-            {token.ticker.slice(0, 3).toUpperCase()}
+          <div className="absolute inset-0 flex items-center justify-center text-6xl font-extrabold tracking-tight text-ink-3/40">
+            {token.ticker.slice(0, 1).toUpperCase()}
           </div>
         )}
-        <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-surface to-transparent" />
-        {/* rarity tag */}
         <span
-          className="font-display absolute left-2 top-2 rounded-md px-1.5 py-0.5 text-[9px] font-bold tracking-wider"
-          style={{ color: rs.chip, background: 'rgba(8,9,14,0.72)', border: `1px solid ${rs.chip}44` }}
+          className="absolute left-2.5 top-2.5 rounded-md px-2 py-0.5 text-[10px] font-bold tracking-widest"
+          style={{ color: rs.accent, background: 'rgba(11,12,14,0.8)' }}
         >
           {rs.label}
         </span>
-        {/* launchpad badge — text label always present */}
         <span
-          className="absolute right-2 top-2 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-          style={{ color: lpColor, background: 'rgba(8,9,14,0.72)', border: `1px solid ${lpColor}44` }}
+          className="absolute right-2.5 top-2.5 rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide"
+          style={{ color: lpColor, background: 'rgba(11,12,14,0.8)' }}
         >
           {token.launchpad}
         </span>
       </div>
 
       {/* identity */}
-      <div className="flex items-start justify-between gap-2 px-3 pt-1.5">
+      <div className="flex items-start justify-between gap-2 px-4 pt-3">
         <div className="min-w-0">
-          <div className="font-display truncate text-[15px] font-bold leading-tight">${token.ticker}</div>
-          <div className="truncate text-[11px] text-ink-3">{token.name}</div>
+          <div className="truncate text-[20px] font-bold leading-tight tracking-tight">${token.ticker}</div>
+          <div className="truncate text-[13px] text-ink-3">{token.name}</div>
         </div>
-        <div className="flex shrink-0 items-center gap-1 pt-0.5">
-          <ScoreChip token={token} />
-        </div>
+        {token.score !== undefined && token.scoreSource != null && (
+          <span
+            className="num shrink-0 rounded-lg px-2 py-1 text-[13px] font-semibold"
+            title={token.scoreSource === 'llm' ? 'AI score' : 'Trust score'}
+            style={{
+              color:
+                token.score >= 70 ? 'var(--color-up)' : token.score >= 45 ? '#e8b64c' : 'var(--color-down)',
+              background: 'var(--color-surface-2)',
+            }}
+          >
+            {token.score}
+          </span>
+        )}
       </div>
 
       {/* stats */}
-      <div className="mt-2 grid grid-cols-3 gap-x-2 gap-y-1.5 px-3 text-[11px]">
+      <div className="mt-3 grid grid-cols-3 gap-2 px-4">
         <div>
-          <div className="text-[9px] uppercase tracking-wider text-ink-3">{token.isCurve ? 'Curve est.' : 'Liquidity'}</div>
-          <div className="num font-medium text-ink">{fmtUsd(token.liquidity)}</div>
+          <div className="text-[10px] font-medium uppercase tracking-wider text-ink-3">
+            {token.isCurve ? 'Curve' : 'Liquidity'}
+          </div>
+          <div className="num text-[14px] font-semibold">{fmtUsd(token.liquidity)}</div>
         </div>
         <div>
-          <div className="text-[9px] uppercase tracking-wider text-ink-3">MCap</div>
-          <div className="num font-medium text-ink">{fmtUsd(token.mcap)}</div>
+          <div className="text-[10px] font-medium uppercase tracking-wider text-ink-3">MCap</div>
+          <div className="num text-[14px] font-semibold">{fmtUsd(token.mcap)}</div>
         </div>
         <div>
-          <div className="text-[9px] uppercase tracking-wider text-ink-3">Vol 24h</div>
-          <div className="num font-medium text-ink">{fmtUsd(token.volume24h)}</div>
+          <div className="text-[10px] font-medium uppercase tracking-wider text-ink-3">Vol 24h</div>
+          <div className="num text-[14px] font-semibold">{fmtUsd(token.volume24h)}</div>
         </div>
       </div>
 
-      {/* sparkline + meta */}
-      <div className="mt-2 flex items-center justify-between px-3">
-        <Sparkline points={token.sparkline} />
-        <div className="flex items-center gap-2 text-[10px] text-ink-3">
-          {token.holders !== undefined && (
-            <span className="num flex items-center gap-0.5">
-              <Users className="h-3 w-3" /> {token.holders}
-            </span>
-          )}
-          <span className={`num flex items-center gap-0.5 ${isFresh ? 'text-pulse' : ''}`}>
-            <Zap className="h-3 w-3" /> {fmtAge(token.createdAt, now)}
-          </span>
-        </div>
+      {/* sparkline + age */}
+      <div className="mt-2.5 flex items-center justify-between px-4">
+        <Sparkline points={token.sparkline} width={110} height={30} />
+        <span className="num text-[13px] text-ink-2">{fmtAge(token.createdAt, now)}</span>
       </div>
 
-      {/* actions */}
-      <div className="mt-auto flex items-center gap-1.5 border-t border-edge px-3 py-2">
-        {token.launchpad === 'flap' && token.isCurve ? (
-          <button
-            onClick={() => onTrade(token)}
-            className="font-display flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1.5 text-[11px] font-bold text-bg transition-transform hover:scale-[1.02] active:scale-[0.98]"
-          >
-            TRADE <ArrowUpRight className="h-3 w-3" />
-          </button>
-        ) : (
+      {/* CA + actions */}
+      <div className="mt-auto flex items-center justify-between gap-2 border-t border-edge px-3 py-2.5">
+        <CopyCA address={token.address} />
+        <div className="flex items-center gap-1.5">
           <a
             href={dexTradeUrl(token)}
             target="_blank"
             rel="noopener noreferrer"
-            className="font-display flex flex-1 items-center justify-center gap-1 rounded-lg border border-edge-bright px-2 py-1.5 text-[11px] font-bold text-ink transition-colors hover:border-pulse hover:text-pulse"
+            title="Open on launchpad / chart"
+            className="flex items-center justify-center rounded-lg bg-surface-2 p-2 text-ink-2 transition-colors hover:text-ink"
           >
-            VIEW <ArrowUpRight className="h-3 w-3" />
+            <ArrowUpRight className="h-4 w-4" />
           </a>
-        )}
-        <button
-          onClick={onFlip}
-          title="AI analysis"
-          className="flex items-center justify-center rounded-lg border border-edge-bright p-1.5 text-ink-2 transition-colors hover:border-pulse hover:text-pulse"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
+          <button
+            onClick={onFlip}
+            title="AI analysis"
+            className="flex items-center justify-center rounded-lg bg-surface-2 p-2 text-ink-2 transition-colors hover:text-pulse"
+          >
+            <ScanSearch className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     </div>
   );
