@@ -10,7 +10,7 @@ const TOKEN_SUPPLY = 1_000_000_000; // Flap tokens launch with fixed 1B supply
 const COLD_START_WINDOW = 150_000; // blocks — chain runs ~9 blk/s, so ≈4.5h of launches
 const TRADE_COLD_WINDOW = 30_000; // trades backfill less: only recent volume matters, and buys are 10× launch volume
 const MAX_TOKENS = 250; // pre-dedupe pool — flap bursts hit 8+ launches/min, mostly clone spam that mergeTokens collapses
-const MAX_ACTIVITY = 60;
+const MAX_ACTIVITY = 200; // whale detection scans this buffer — too small and big buys vanish between refreshes
 
 const TOPIC_CREATED = '0x504e7f360b2e5fe33cbaaae4c593bc55305328341bf79009e43e0e3b7f699603';
 const TOPIC_BOUGHT = '0xa800a2038683844fac66747f771bfdfae862eb28b16bcfa387afa9fbacce8ff7';

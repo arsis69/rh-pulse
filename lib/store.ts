@@ -8,6 +8,7 @@ const NEW_WINDOW_MS = 90_000;
 interface PulseState {
   tokens: Token[];
   activity: TradeEvent[];
+  whales: TradeEvent[];
   stats: FeedStats;
   firstSeenAt: Map<string, number>;
   analyses: Map<string, LLMAnalysis>;
@@ -24,6 +25,7 @@ interface PulseState {
 export const usePulseStore = create<PulseState>((set, get) => ({
   tokens: [],
   activity: [],
+  whales: [],
   stats: { launches24h: 0, launches1h: 0, hottest: null, ethUsd: 0 },
   firstSeenAt: new Map(),
   analyses: new Map(),
@@ -53,6 +55,7 @@ export const usePulseStore = create<PulseState>((set, get) => ({
     set({
       tokens,
       activity: payload.activity,
+      whales: payload.whales ?? [],
       stats: payload.stats,
       firstSeenAt: seen,
       analyses: merged,

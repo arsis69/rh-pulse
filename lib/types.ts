@@ -78,6 +78,7 @@ export interface FeedStats {
 export interface FeedPayload {
   tokens: Token[];
   activity: TradeEvent[];
+  whales: TradeEvent[]; // whale/smart-money events, retained 24h server-side
   stats: FeedStats;
   serverTime: number;
 }

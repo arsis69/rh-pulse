@@ -9,13 +9,10 @@ interface RecentTradesProps {
   className?: string;
 }
 
-function isWhaleTrade(trade: import('@/lib/types').TradeEvent) {
-  return trade.whale || trade.usd >= 1000 || trade.eth >= 0.5;
-}
-
 export function RecentTrades({ now, className }: RecentTradesProps) {
-  const activity = usePulseStore((s) => s.activity);
-  const whales = activity.filter(isWhaleTrade).slice(0, 30);
+  // server retains whale/smart-money events for 24h — the raw trade tape churns
+  // in seconds, so filtering it client-side showed nothing
+  const whales = usePulseStore((s) => s.whales);
 
   if (whales.length === 0) {
     return (

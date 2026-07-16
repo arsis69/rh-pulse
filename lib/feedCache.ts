@@ -64,6 +64,9 @@ interface CacheState {
   chainMetaQueue: string[];
   analyses: Map<string, LLMAnalysis | null>; // null = known-missing in DB, analyze pending
   analyzeBusy: boolean;
+  // whale/smart-money events retained separately — the rolling trade tape churns
+  // in seconds on this chain, so rare big buys must not be flushed with it
+  whaleEvents: Map<string, TradeEvent>;
 }
 
 const state: CacheState = {
@@ -88,6 +91,7 @@ const state: CacheState = {
   chainMetaQueue: [],
   analyses: new Map(),
   analyzeBusy: false,
+  whaleEvents: new Map(),
 };
 
 async function refreshEth() {
@@ -545,9 +549,12 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   const smartMoneySet = smartMoney.status === 'fulfilled' ? smartMoney.value : new Set<string>();
 
   const hourAgo = Date.now() / 1000 - 3600;
-  const activity: TradeEvent[] = [...state.flap.activity, ...state.klik.activity]
+  // thresholds sized for this chain: flap curves are microcaps — a $400 buy IS a
+  // whale here (the old $1000 bar fired ~never)
+  const WHALE_USD = 400;
+  const WHALE_ETH = 0.2;
+  const flagged: TradeEvent[] = [...state.flap.activity, ...state.klik.activity]
     .sort((a, b) => b.ts - a.ts)
-    .slice(0, 30)
     .map((trade) => {
       if (trade.whale) return trade;
       const t = tokens.find((x) => x.id === trade.token.toLowerCase());
@@ -570,7 +577,7 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
         return { ...trade, whale: { type: 'large_buy', context: '1% supply' } as const };
       }
 
-      const isLarge = trade.usd >= 1000 || trade.eth >= 0.5;
+      const isLarge = trade.usd >= WHALE_USD || trade.eth >= WHALE_ETH;
       const isNew = t && t.createdAt >= hourAgo;
       if (isLarge) {
         return {
@@ -580,6 +587,17 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
       }
       return trade;
     });
+  const activity = flagged.slice(0, 30);
+
+  // retain whale events for 24h so rare signals stay visible instead of being
+  // flushed with the trade tape within seconds
+  const dayAgoSec = Date.now() / 1000 - 86400;
+  for (const t of flagged) {
+    if (!t.whale) continue;
+    state.whaleEvents.set(`${t.ts}:${t.token}:${t.address}:${t.side}:${t.eth}`, t);
+  }
+  for (const [k, t] of state.whaleEvents) if (t.ts < dayAgoSec) state.whaleEvents.delete(k);
+  const whales = [...state.whaleEvents.values()].sort((a, b) => b.ts - a.ts).slice(0, 50);
 
   const nowSec = Date.now() / 1000;
   for (const t of tokens) applyActivityBoost(t, activity, nowSec);
@@ -593,6 +611,7 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   return {
     tokens,
     activity,
+    whales,
     stats: {
       launches24h: state.flap.launches24h + state.klik.launches.length,
       launches1h,
