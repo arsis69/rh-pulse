@@ -11,6 +11,8 @@ export function Nav() {
       </div>
       <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-4 sm:px-6">
         <div className="flex items-center gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.jpg" alt="Pulse" className="h-9 w-9 rounded-xl ring-1 ring-edge" />
           <span className="text-[28px] font-bold tracking-tight">
             <span className="text-pulse text-glow">Pulse</span>
           </span>

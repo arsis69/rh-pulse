@@ -7,8 +7,9 @@ import { flapPortalAddress } from '@/lib/chain';
 const RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
 const EXPLORER_API = 'https://robinhoodchain.blockscout.com/api';
 const TOKEN_SUPPLY = 1_000_000_000; // Flap tokens launch with fixed 1B supply
-const COLD_START_WINDOW = 60_000; // blocks, covers ~1 day
-const MAX_TOKENS = 80;
+const COLD_START_WINDOW = 150_000; // blocks — chain runs ~9 blk/s, so ≈4.5h of launches
+const TRADE_COLD_WINDOW = 30_000; // trades backfill less: only recent volume matters, and buys are 10× launch volume
+const MAX_TOKENS = 250; // pre-dedupe pool — flap bursts hit 8+ launches/min, mostly clone spam that mergeTokens collapses
 const MAX_ACTIVITY = 60;
 
 const TOPIC_CREATED = '0x504e7f360b2e5fe33cbaaae4c593bc55305328341bf79009e43e0e3b7f699603';
@@ -59,6 +60,21 @@ async function getPortalLogs(topic0: string, fromBlock: number, toBlock: number)
   const res = await fetch(url, { cache: 'no-store' });
   const json = await res.json();
   return Array.isArray(json.result) ? json.result : [];
+}
+
+// Blockscout silently truncates getLogs at 1000 rows, returning the OLDEST ones —
+// a capped cold-start scan would ingest stale launches, then advance the cursor
+// past everything newer (this is how launches went missing). Bisect on cap.
+const LOG_CAP = 1000;
+async function getPortalLogsPaged(topic0: string, fromBlock: number, toBlock: number, depth = 0): Promise<RawLog[]> {
+  const logs = await getPortalLogs(topic0, fromBlock, toBlock);
+  if (logs.length < LOG_CAP || depth >= 7 || toBlock - fromBlock < 2_000) return logs;
+  const mid = Math.floor((fromBlock + toBlock) / 2);
+  const [a, b] = await Promise.all([
+    getPortalLogsPaged(topic0, fromBlock, mid, depth + 1),
+    getPortalLogsPaged(topic0, mid + 1, toBlock, depth + 1),
+  ]);
+  return [...a, ...b];
 }
 
 function decode(log: RawLog) {
@@ -120,12 +136,13 @@ export interface FlapSnapshot {
 export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
   const latest = await rpcBlockNumber();
   const from = cursor === 0 ? Math.max(latest - COLD_START_WINDOW, 0) : cursor + 1;
+  const tradeFrom = cursor === 0 ? Math.max(latest - TRADE_COLD_WINDOW, 0) : cursor + 1;
 
   if (from <= latest) {
     const [created, bought, sold] = await Promise.all([
-      getPortalLogs(TOPIC_CREATED, from, latest),
-      getPortalLogs(TOPIC_BOUGHT, from, latest),
-      getPortalLogs(TOPIC_SOLD, from, latest),
+      getPortalLogsPaged(TOPIC_CREATED, from, latest),
+      getPortalLogsPaged(TOPIC_BOUGHT, tradeFrom, latest),
+      getPortalLogsPaged(TOPIC_SOLD, tradeFrom, latest),
     ]);
     for (const log of created) {
       try {

@@ -52,6 +52,20 @@ async function getFactoryLogs(topic0: string, fromBlock: number, toBlock: number
   return Array.isArray(json.result) ? json.result : [];
 }
 
+// Blockscout truncates getLogs at 1000 rows (oldest first) — bisect on cap so a
+// busy window can't swallow recent events (see flap.ts for the full story).
+const LOG_CAP = 1000;
+async function getFactoryLogsPaged(topic0: string, fromBlock: number, toBlock: number, depth = 0): Promise<RawLog[]> {
+  const logs = await getFactoryLogs(topic0, fromBlock, toBlock);
+  if (logs.length < LOG_CAP || depth >= 7 || toBlock - fromBlock < 2_000) return logs;
+  const mid = Math.floor((fromBlock + toBlock) / 2);
+  const [a, b] = await Promise.all([
+    getFactoryLogsPaged(topic0, fromBlock, mid, depth + 1),
+    getFactoryLogsPaged(topic0, mid + 1, toBlock, depth + 1),
+  ]);
+  return [...a, ...b];
+}
+
 async function fetchTokenMeta(address: string): Promise<{ name: string; ticker: string; holders?: number; supply?: number; decimals?: number; imageUrl?: string } | null> {
   try {
     const res = await fetch(`${EXPLORER_V2}/tokens/${address}`, { cache: 'no-store' });
@@ -85,8 +99,8 @@ export async function refreshKlik(ethUsd: number): Promise<KlikSnapshot> {
 
   if (from <= latest) {
     const [created, purchased] = await Promise.all([
-      getFactoryLogs(TOPIC_CREATED, from, latest),
-      getFactoryLogs(TOPIC_PURCHASED, from, latest),
+      getFactoryLogsPaged(TOPIC_CREATED, from, latest),
+      getFactoryLogsPaged(TOPIC_PURCHASED, from, latest),
     ]);
     for (const log of created) {
       // ERC20TokenCreated(address tokenAddress) — address is the sole data word

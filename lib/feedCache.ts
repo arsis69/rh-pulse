@@ -19,7 +19,9 @@ const ETH_TTL = 60_000;
 const DRAIN_MIN_INTERVAL = 8_000; // enrichment fires on the heartbeat cadence, not per viewer request
 const IPFS_PER_REFRESH = 16;
 const CHAIN_META_PER_REFRESH = 5; // Blockscout is generous; supply+holders lookups
-const MAX_TOKENS = 60;
+// launch bursts hit ~15 tokens/min on this chain — at 60 a card lived ~4 minutes
+// before being flushed, so a "10 minutes ago" launch was already invisible
+const MAX_TOKENS = 180;
 const SEEN_GECKO_MAX = 400;
 // cloudflare-ipfs.com is dead (sunset 2024) and pinata's public gateway rate-limits hard — keep it last
 const IPFS_GATEWAYS = [
@@ -407,6 +409,25 @@ function mergeTokens(): Token[] {
       supply: existing?.supply ?? g.supply,
       metaCid: existing?.metaCid,
     });
+  }
+
+  // collapse clone spam: bots relaunch the same curve token dozens of times
+  // (e.g. 5× "Mimic" in 10 minutes) — keep the copy with real traction so the
+  // board isn't wallpapered with identical dead cards
+  const byClone = new Map<string, Token>();
+  for (const t of byAddr.values()) {
+    if (!t.isCurve) continue;
+    const key = `${t.launchpad}:${t.ticker.toLowerCase()}:${t.name.toLowerCase()}`;
+    const best = byClone.get(key);
+    if (!best) {
+      byClone.set(key, t);
+      continue;
+    }
+    const winner =
+      t.volume24h !== best.volume24h ? (t.volume24h > best.volume24h ? t : best) : t.createdAt > best.createdAt ? t : best;
+    const loser = winner === t ? best : t;
+    byClone.set(key, winner);
+    byAddr.delete(loser.id);
   }
 
   let tokens = [...byAddr.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, MAX_TOKENS);

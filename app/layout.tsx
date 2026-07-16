@@ -19,7 +19,11 @@ export const metadata: Metadata = {
   title: "Pulse — live token radar for Robinhood Chain",
   description:
     "Every new token on Robinhood Chain, live — Flap, Pons, Klik, Virtuals & more, with real market data and AI analysis.",
-  icons: { icon: "/favicon.ico" },
+  openGraph: {
+    title: "Pulse — live token radar for Robinhood Chain",
+    description: "Every new token on Robinhood Chain, live, with real market data and AI analysis.",
+    images: ["/logo.jpg"],
+  },
 };
 
 export default function RootLayout({
