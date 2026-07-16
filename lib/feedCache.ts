@@ -10,21 +10,23 @@ import { analyzeToken } from '@/lib/llm';
 import { getAnalysis, saveAnalysis } from '@/lib/supabase';
 import { isBlacklistedToken, computeTrustScore, applyActivityBoost } from '@/lib/score';
 import { getSmartMoneySet } from '@/lib/smartMoney';
+import { proxiedImageUrl } from '@/lib/imageProxy';
 
 const GECKO_TTL = 30_000; // slow down to stay inside GT ~30 req/min free tier
-const DEX_TTL = 60_000; // per-dex top-up (virtuals/bankr/pons) changes slowly
+const DEX_TTL = 30_000; // per-dex top-up (virtuals/bankr/pons) — must catch launches GT's newest list churns past
 const CHAIN_TTL = 6_000;
 const ETH_TTL = 60_000;
-const INFO_PER_REFRESH = 3;
+const DRAIN_MIN_INTERVAL = 8_000; // enrichment fires on the heartbeat cadence, not per viewer request
 const IPFS_PER_REFRESH = 16;
 const CHAIN_META_PER_REFRESH = 5; // Blockscout is generous; supply+holders lookups
 const MAX_TOKENS = 60;
+const SEEN_GECKO_MAX = 400;
+// cloudflare-ipfs.com is dead (sunset 2024) and pinata's public gateway rate-limits hard — keep it last
 const IPFS_GATEWAYS = [
-  'https://gateway.pinata.cloud/ipfs/',
-  'https://cloudflare-ipfs.com/ipfs/',
-  'https://nftstorage.link/ipfs/',
   'https://ipfs.io/ipfs/',
   'https://dweb.link/ipfs/',
+  'https://nftstorage.link/ipfs/',
+  'https://gateway.pinata.cloud/ipfs/',
 ];
 
 interface IpfsMeta {
@@ -41,6 +43,11 @@ interface CacheState {
   geckoInflight: Promise<void> | null;
   dexTokens: Token[];
   dexAt: number;
+  // every gecko pool token ever seen this process — GT's newest list only covers
+  // ~1 minute on this chain (pons spam), so quiet launchpads (virtuals/bankr)
+  // churn out of the snapshot before viewers ever see them. Accumulate instead.
+  seenGecko: Map<string, Token>;
+  drainAt: number;
   flap: FlapSnapshot;
   klik: KlikSnapshot;
   chainAt: number;
@@ -63,6 +70,8 @@ const state: CacheState = {
   geckoInflight: null,
   dexTokens: [],
   dexAt: 0,
+  seenGecko: new Map(),
+  drainAt: 0,
   flap: { tokens: [], activity: [], launches24h: 0 },
   klik: { launches: [], klikAddresses: new Set(), activity: [] },
   chainAt: 0,
@@ -93,15 +102,74 @@ async function refreshEth() {
   }
 }
 
+// seenGecko survives deploys on disk — otherwise every restart forgets the quiet
+// launchpads until GT's volume-sorted per-dex list happens to resurface them.
+const SEEN_CACHE_FILE = '.cache/seen-gecko.json';
+let seenSaveAt = 0;
+let seenLoaded = false;
+
+async function loadSeenGecko() {
+  try {
+    const { readFile } = await import('fs/promises');
+    const rows: Token[] = JSON.parse(await readFile(SEEN_CACHE_FILE, 'utf8'));
+    for (const t of rows) if (!state.seenGecko.has(t.id)) state.seenGecko.set(t.id, t);
+  } catch {
+    /* first boot or unreadable cache */
+  }
+}
+
+async function saveSeenGecko() {
+  if (Date.now() - seenSaveAt < 60_000) return;
+  seenSaveAt = Date.now();
+  try {
+    const { mkdir, writeFile } = await import('fs/promises');
+    await mkdir('.cache', { recursive: true });
+    await writeFile(SEEN_CACHE_FILE, JSON.stringify([...state.seenGecko.values()]));
+  } catch {
+    /* best effort */
+  }
+}
+
+// Remember every pool GT has ever shown us: fresh sightings replace old entries
+// (updated stats), unseen ones survive list churn so cards don't vanish.
+// Quiet launchpads are never evicted by the cap — pons spam (~30 pools/min)
+// would otherwise flush a virtuals launch out of memory within minutes.
+const PROTECTED_LAUNCHPADS = new Set(['virtuals', 'bankr']);
+function absorbGecko(tokens: Token[]) {
+  for (const t of tokens) state.seenGecko.set(t.id, t);
+  void saveSeenGecko();
+  if (state.seenGecko.size <= SEEN_GECKO_MAX) return;
+  const dayAgo = Date.now() / 1000 - 86400;
+  for (const [k, v] of state.seenGecko) {
+    if (v.createdAt < dayAgo && !PROTECTED_LAUNCHPADS.has(v.launchpad)) state.seenGecko.delete(k);
+  }
+  if (state.seenGecko.size <= SEEN_GECKO_MAX) return;
+  const evictable = [...state.seenGecko.values()]
+    .filter((t) => !PROTECTED_LAUNCHPADS.has(t.launchpad))
+    .sort((a, b) => a.createdAt - b.createdAt); // oldest first
+  for (const t of evictable) {
+    if (state.seenGecko.size <= SEEN_GECKO_MAX) break;
+    state.seenGecko.delete(t.id);
+  }
+}
+
 async function refreshGecko() {
   if (Date.now() - state.geckoAt < GECKO_TTL) return;
   if (state.geckoInflight) return state.geckoInflight;
   state.geckoInflight = (async () => {
     try {
-      state.geckoTokens = await fetchNewPools();
+      // two pages ≈ 2 minutes of launches on this chain — one page churns in <60s
+      const [p1, p2] = await Promise.allSettled([fetchNewPools(1), fetchNewPools(2)]);
+      const all: Token[] = [];
+      if (p1.status === 'fulfilled') all.push(...p1.value);
+      if (p2.status === 'fulfilled') all.push(...p2.value);
+      if (p1.status === 'rejected' && p2.status === 'rejected') throw new Error('GT new_pools failed');
+      state.geckoTokens = all;
+      absorbGecko(all);
       state.geckoAt = Date.now();
     } catch {
-      state.geckoAt = Date.now() - GECKO_TTL + 5_000;
+      // failure is usually a 429 — back off instead of hammering a rate limit
+      state.geckoAt = Date.now() - GECKO_TTL + 15_000;
     } finally {
       state.geckoInflight = null;
     }
@@ -124,6 +192,7 @@ async function refreshDexTopUps() {
     if (bankr.status === 'fulfilled') all.push(...bankr.value);
     if (pons.status === 'fulfilled') all.push(...pons.value);
     state.dexTokens = all;
+    absorbGecko(all);
   } catch {
     /* keep stale */
   }
@@ -156,7 +225,7 @@ function attachScore(t: Token) {
 async function drainInfoQueue() {
   // Prefer DexScreener batch calls: one request covers up to 30 tokens and does
   // not count against GeckoTerminal's tight free-tier rate limit.
-  const batch = state.infoQueue.splice(0, Math.max(INFO_PER_REFRESH, state.infoQueue.length));
+  const batch = state.infoQueue.splice(0);
   const missing = batch.filter((addr) => !state.info.has(addr));
   if (missing.length === 0) return;
 
@@ -165,9 +234,9 @@ async function drainInfoQueue() {
     state.info.set(addr, Object.keys(info).length ? info : null);
   }
 
-  // Fallback to GeckoTerminal for tokens DexScreener doesn't know yet, but keep
-  // it small to avoid blowing the rate limit.
-  const fallback = missing.filter((addr) => !ds.has(addr)).slice(0, 2);
+  // Fallback to GeckoTerminal for tokens DexScreener doesn't know yet — one per
+  // drain, max: pools polling already uses most of GT's ~30/min budget.
+  const fallback = missing.filter((addr) => !ds.has(addr)).slice(0, 1);
   for (const addr of fallback) {
     const info = await fetchTokenInfo(addr);
     if (info !== null) state.info.set(addr, Object.keys(info).length ? info : null);
@@ -319,8 +388,8 @@ function mergeTokens(): Token[] {
     }
   }
 
-  // gecko pools (network-newest + per-dex top-ups): real numbers win; keep attribution
-  for (const g of [...state.geckoTokens, ...state.dexTokens]) {
+  // gecko pools (accumulated across polls): real numbers win; keep attribution
+  for (const g of state.seenGecko.values()) {
     const existing = byAddr.get(g.id);
     const launchpad = state.klik.klikAddresses.has(g.id)
       ? ('klik' as const)
@@ -342,15 +411,18 @@ function mergeTokens(): Token[] {
 
   let tokens = [...byAddr.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, MAX_TOKENS);
 
-  // quiet launchpads (virtuals) launch rarely — guarantee them a few slots so
-  // the filter pill always has content instead of being buried by flap volume
+  // quiet launchpads launch rarely — guarantee each a few slots so their
+  // filter pills always have content instead of being buried by flap/pons volume
   const RESERVED = 4;
-  if (!tokens.some((t) => t.launchpad === 'virtuals')) {
+  for (const lp of ['virtuals', 'bankr', 'klik'] as const) {
+    const have = tokens.filter((t) => t.launchpad === lp).length;
+    if (have >= RESERVED) continue;
+    const inFeed = new Set(tokens.map((t) => t.id));
     const extras = [...byAddr.values()]
-      .filter((t) => t.launchpad === 'virtuals')
+      .filter((t) => t.launchpad === lp && !inFeed.has(t.id))
       .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, RESERVED);
-    if (extras.length) tokens = [...tokens.slice(0, MAX_TOKENS - extras.length), ...extras];
+      .slice(0, RESERVED - have);
+    if (extras.length) tokens = [...tokens.slice(0, tokens.length - extras.length), ...extras];
   }
 
   for (const t of tokens) {
@@ -402,6 +474,11 @@ function mergeTokens(): Token[] {
 
     t.hasX = Boolean(t.twitter);
 
+    // serve images through our origin: Cloudflare edge-caches them and the
+    // browser never touches slow / rate-limited IPFS gateways directly
+    t.imageUrl = proxiedImageUrl(t.imageUrl);
+    t.bannerUrl = proxiedImageUrl(t.bannerUrl);
+
     // fallback heuristic score when no GT score or LLM analysis exists
     attachScore(t);
 
@@ -417,15 +494,25 @@ function mergeTokens(): Token[] {
 }
 
 export async function buildFeedPayload(): Promise<FeedPayload> {
+  if (!seenLoaded) {
+    seenLoaded = true;
+    await loadSeenGecko();
+  }
   await refreshEth();
   await Promise.all([refreshGecko(), refreshDexTopUps(), refreshChain()]);
-  await Promise.all([drainInfoQueue(), drainIpfsQueue(), drainChainMetaQueue()]);
 
-  let tokens = mergeTokens();
-  tokens = tokens.filter((t) => !isBlacklistedToken(t.ticker));
-  await loadKnownAnalyses(tokens);
-  tokens = mergeTokens().filter((t) => !isBlacklistedToken(t.ticker)); // re-merge so freshly loaded analyses attach
-  kickAnalyzeDrip(tokens);
+  let tokens = mergeTokens().filter((t) => !isBlacklistedToken(t.ticker));
+
+  // Enrichment runs on the heartbeat cadence, never per viewer request —
+  // otherwise N viewers hammering /api/feed multiplies upstream calls and
+  // burns the GT/LLM budget (feed reads stay cheap under load).
+  if (Date.now() - state.drainAt >= DRAIN_MIN_INTERVAL) {
+    state.drainAt = Date.now();
+    await Promise.all([drainInfoQueue(), drainIpfsQueue(), drainChainMetaQueue()]);
+    await loadKnownAnalyses(tokens);
+    tokens = mergeTokens().filter((t) => !isBlacklistedToken(t.ticker)); // re-merge so fresh enrichment attaches
+    kickAnalyzeDrip(tokens);
+  }
 
   const [smartMoney] = await Promise.allSettled([getSmartMoneySet()]);
   const smartMoneySet = smartMoney.status === 'fulfilled' ? smartMoney.value : new Set<string>();

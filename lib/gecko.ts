@@ -48,8 +48,8 @@ function synthSparkline(pct: Record<string, string | null>): number[] {
   return points;
 }
 
-export async function fetchNewPools(): Promise<Token[]> {
-  return fetchPoolsFrom(`${GT}/networks/${NETWORK}/new_pools?page=1&include=base_token`);
+export async function fetchNewPools(page = 1): Promise<Token[]> {
+  return fetchPoolsFrom(`${GT}/networks/${NETWORK}/new_pools?page=${page}&include=base_token`);
 }
 
 // Per-dex pools: guarantees low-traffic launchpads (e.g. virtuals) stay represented

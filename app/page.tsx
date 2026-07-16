@@ -119,7 +119,7 @@ export default function RHPulse() {
       </main>
 
       <footer className="border-t border-edge py-6 text-center text-[12px] text-ink-3">
-        RH Pulse · live data from Robinhood Chain, GeckoTerminal &amp; launchpad contracts · not financial advice
+        Pulse · live data from Robinhood Chain, GeckoTerminal &amp; launchpad contracts · not financial advice
       </footer>
 
       <TokenDrawer

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Token } from '@/lib/types';
 import { fmtUsd, fmtAge } from '@/lib/format';
-import { gmgnUrl } from '@/lib/geckoShared';
+import { gmgnUrl, safeHttpUrl, safeSocialUrl } from '@/lib/geckoShared';
 import { TokenImage } from '@/components/ui/TokenImage';
 import { useTokenAnalysis } from '@/hooks/useTokenAnalysis';
 
@@ -143,11 +143,11 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                   {token.txns24h !== undefined && <Stat label="Txns 24h" value={token.txns24h.toLocaleString()} />}
                 </div>
 
-                {/* socials + links */}
+                {/* socials + links — deployer-supplied values, sanitized before rendering */}
                 <div className="flex flex-wrap items-center gap-2">
-                  {token.twitter && <SocialLink href={token.twitter} icon={X} label="X" />}
-                  {token.telegram && <SocialLink href={token.telegram} icon={MessageCircle} label="TG" />}
-                  {token.website && <SocialLink href={token.website} icon={Globe} label="Web" />}
+                  <MaybeSocial href={safeSocialUrl('twitter', token.twitter)} icon={X} label="X" />
+                  <MaybeSocial href={safeSocialUrl('telegram', token.telegram)} icon={MessageCircle} label="TG" />
+                  <MaybeSocial href={safeHttpUrl(token.website)} icon={Globe} label="Web" />
                   <a
                     href={gmgnUrl(token)}
                     target="_blank"
@@ -278,6 +278,11 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="num mt-1 text-[18px] font-semibold text-ink">{value}</div>
     </div>
   );
+}
+
+function MaybeSocial({ href, icon, label }: { href?: string; icon: React.ElementType; label: string }) {
+  if (!href) return null;
+  return <SocialLink href={href} icon={icon} label={label} />;
 }
 
 function SocialLink({ href, icon: Icon, label }: { href: string; icon: React.ElementType; label: string }) {

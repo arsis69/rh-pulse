@@ -10,27 +10,9 @@ interface TokenImageProps {
   priority?: boolean;
 }
 
-const IPFS_GATEWAYS = [
-  'https://gateway.pinata.cloud/ipfs/',
-  'https://cloudflare-ipfs.com/ipfs/',
-  'https://nftstorage.link/ipfs/',
-  'https://ipfs.io/ipfs/',
-  'https://dweb.link/ipfs/',
-];
-
-function ipfsGatewayUrl(url: string, index: number): string {
-  for (let i = 0; i < IPFS_GATEWAYS.length; i++) {
-    if (url.startsWith(IPFS_GATEWAYS[i])) {
-      const next = i + index;
-      if (next >= IPFS_GATEWAYS.length) return url;
-      return url.replace(IPFS_GATEWAYS[i], IPFS_GATEWAYS[next]);
-    }
-  }
-  return url;
-}
-
+// Images arrive already routed through /api/img (server-side proxy handles IPFS
+// gateway fallback + edge caching), so the client just renders or falls back.
 export function TokenImage({ src, alt, className, fallbackClassName, priority }: TokenImageProps) {
-  const [gatewayIndex, setGatewayIndex] = useState(0);
   const [error, setError] = useState(false);
 
   if (!src || error) {
@@ -45,33 +27,16 @@ export function TokenImage({ src, alt, className, fallbackClassName, priority }:
     );
   }
 
-  const currentSrc = ipfsGatewayUrl(src, gatewayIndex);
-
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={currentSrc}
+      src={src}
       alt={alt}
       loading={priority ? 'eager' : 'lazy'}
       fetchPriority={priority ? 'high' : 'auto'}
-      decoding={priority ? 'sync' : 'async'}
+      decoding="async"
       className={className}
-      onError={() => {
-        const next = gatewayIndex + 1;
-        // count how many IPFS gateways exist for this url; if exhausted, show fallback
-        let gatewayCount = 0;
-        for (const g of IPFS_GATEWAYS) {
-          if (src.startsWith(g)) {
-            gatewayCount = IPFS_GATEWAYS.length;
-            break;
-          }
-        }
-        if (gatewayCount > 0 && next < gatewayCount) {
-          setGatewayIndex(next);
-        } else {
-          setError(true);
-        }
-      }}
+      onError={() => setError(true)}
     />
   );
 }
