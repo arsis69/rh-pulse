@@ -34,7 +34,7 @@ export const launchpadColors: Record<string, string> = {
   nock: '#14B8A6', // teal
   pons: '#8B93A7', // gray (brand)
   klik: '#E2E8F0', // near-white (brand black, inverted)
-  other: '#64748B',
+  other: '#F472B6', // pink — must read differently from pons' gray
 };
 
 export const flapPortalAddress = '0x26605f322f7fF986f381bB9A6e3f5DAb0bEaEb09' as const;
