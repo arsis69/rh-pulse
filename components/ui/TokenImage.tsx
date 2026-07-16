@@ -26,9 +26,15 @@ function fallbackSvg(seed: string, label: string): string {
   const light2 = 45 + ((h >> 4) % 20);
   const c1 = `hsl(${hue1} ${sat}% ${light1}%)`;
   const c2 = `hsl(${hue2} ${sat}% ${light2}%)`;
-  const text = label.slice(0, 2).toUpperCase();
+  // XML-escape and NEVER btoa: tickers contain emoji/unicode, and btoa throws
+  // InvalidCharacterError outside Latin1 — this crashed the whole app for every
+  // visitor the moment one unicode-ticker token entered the feed.
+  const text = label
+    .slice(0, 2)
+    .toUpperCase()
+    .replace(/[<>&'"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="${c1}"/><stop offset="100%" stop-color="${c2}"/></linearGradient></defs><rect width="128" height="128" fill="url(#g)"/><text x="64" y="76" font-size="52" font-weight="800" font-family="system-ui,sans-serif" text-anchor="middle" fill="rgba(0,0,0,0.55)">${text}</text></svg>`;
-  return `data:image/svg+xml;base64,${typeof window !== 'undefined' ? btoa(svg) : Buffer.from(svg).toString('base64')}`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
 // Images arrive already routed through /api/img (server-side proxy handles IPFS
