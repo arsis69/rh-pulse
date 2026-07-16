@@ -412,18 +412,24 @@ function mergeTokens(): Token[] {
   let tokens = [...byAddr.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, MAX_TOKENS);
 
   // quiet launchpads launch rarely — guarantee each a few slots so their
-  // filter pills always have content instead of being buried by flap/pons volume
+  // filter pills always have content instead of being buried by flap/pons volume.
+  // Collect ALL extras before truncating once: truncating per launchpad would
+  // evict the previous launchpad's freshly appended extras from the tail.
   const RESERVED = 4;
+  const inFeed = new Set(tokens.map((t) => t.id));
+  const extras: Token[] = [];
   for (const lp of ['virtuals', 'bankr', 'klik'] as const) {
     const have = tokens.filter((t) => t.launchpad === lp).length;
     if (have >= RESERVED) continue;
-    const inFeed = new Set(tokens.map((t) => t.id));
-    const extras = [...byAddr.values()]
-      .filter((t) => t.launchpad === lp && !inFeed.has(t.id))
+    for (const t of [...byAddr.values()]
+      .filter((t) => t.launchpad === lp && !inFeed.has(t.id) && !isBlacklistedToken(t.ticker))
       .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, RESERVED - have);
-    if (extras.length) tokens = [...tokens.slice(0, tokens.length - extras.length), ...extras];
+      .slice(0, RESERVED - have)) {
+      extras.push(t);
+      inFeed.add(t.id);
+    }
   }
+  if (extras.length) tokens = [...tokens.slice(0, Math.max(tokens.length - extras.length, 0)), ...extras];
 
   for (const t of tokens) {
     // GT token info (images/socials/gt_score for DEX tokens)
