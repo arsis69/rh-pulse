@@ -10,7 +10,8 @@ import { analyzeToken } from '@/lib/llm';
 import { getAnalysis, saveAnalysis } from '@/lib/supabase';
 import { isBlacklistedToken, computeTrustScore, applyActivityBoost } from '@/lib/score';
 import { getSmartMoneySet } from '@/lib/smartMoney';
-import { proxiedImageUrl } from '@/lib/imageProxy';
+import { proxiedImageUrl, normalizeUpstream } from '@/lib/imageProxy';
+import { getImage, isWarm } from '@/lib/imageCache';
 
 const GECKO_TTL = 30_000; // slow down to stay inside GT ~30 req/min free tier
 const DEX_TTL = 30_000; // per-dex top-up (virtuals/bankr/pons) — must catch launches GT's newest list churns past
@@ -67,6 +68,7 @@ interface CacheState {
   // whale/smart-money events retained separately — the rolling trade tape churns
   // in seconds on this chain, so rare big buys must not be flushed with it
   whaleEvents: Map<string, TradeEvent>;
+  prewarmQueue: string[]; // upstream image refs to pull into the cache before viewers ask
 }
 
 const state: CacheState = {
@@ -92,6 +94,7 @@ const state: CacheState = {
   analyses: new Map(),
   analyzeBusy: false,
   whaleEvents: new Map(),
+  prewarmQueue: [],
 };
 
 async function refreshEth() {
@@ -505,10 +508,12 @@ function mergeTokens(): Token[] {
 
     t.hasX = Boolean(t.twitter);
 
-    // serve images through our origin: Cloudflare edge-caches them and the
-    // browser never touches slow / rate-limited IPFS gateways directly
-    t.imageUrl = proxiedImageUrl(t.imageUrl);
-    t.bannerUrl = proxiedImageUrl(t.bannerUrl);
+    // serve images through our origin as edge-cacheable webp thumbnails; queue
+    // unseen art for prewarm so it's resident before the first viewer asks
+    const up = normalizeUpstream(t.imageUrl);
+    if (up && !isWarm(up, 256) && !state.prewarmQueue.includes(up)) state.prewarmQueue.push(up);
+    t.imageUrl = proxiedImageUrl(t.imageUrl, 256);
+    t.bannerUrl = proxiedImageUrl(t.bannerUrl, 640);
 
     // fallback heuristic score when no GT score or LLM analysis exists
     attachScore(t);
@@ -543,6 +548,9 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
     await loadKnownAnalyses(tokens);
     tokens = mergeTokens().filter((t) => !isBlacklistedToken(t.ticker)); // re-merge so fresh enrichment attaches
     kickAnalyzeDrip(tokens);
+    // prewarm thumbnails in the background — never blocks the feed response
+    const warmBatch = state.prewarmQueue.splice(0, 6);
+    if (warmBatch.length) void Promise.allSettled(warmBatch.map((u) => getImage(u, 256)));
   }
 
   const [smartMoney] = await Promise.allSettled([getSmartMoneySet()]);

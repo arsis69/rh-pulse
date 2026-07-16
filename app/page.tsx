@@ -92,7 +92,7 @@ export default function RHPulse() {
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <AnimatePresence mode="popLayout">
-                  {filtered.map((token) => (
+                  {filtered.map((token, i) => (
                     <motion.div
                       key={token.id}
                       layout
@@ -101,7 +101,7 @@ export default function RHPulse() {
                       exit={{ opacity: 0, scale: 0.96 }}
                       transition={{ type: 'spring', stiffness: 300, damping: 28 }}
                     >
-                      <FeedCard token={token} now={now} onSelect={() => setSelectedToken(token)} />
+                      <FeedCard token={token} now={now} onSelect={() => setSelectedToken(token)} priority={i < 8} />
                     </motion.div>
                   ))}
                 </AnimatePresence>

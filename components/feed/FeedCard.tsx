@@ -14,6 +14,7 @@ interface FeedCardProps {
   token: Token;
   now: number;
   onSelect: () => void;
+  priority?: boolean; // above-the-fold cards load art eagerly
 }
 
 function scoreAccent(score?: number) {
@@ -44,7 +45,7 @@ function CopyCA({ address, onClick }: { address: string; onClick?: (e: React.Mou
   );
 }
 
-export function FeedCard({ token, now, onSelect }: FeedCardProps) {
+export function FeedCard({ token, now, onSelect, priority }: FeedCardProps) {
   const accent = scoreAccent(token.score);
   const lpColor = launchpadColors[token.launchpad] || launchpadColors.other;
   const firstSeenAt = usePulseStore((s) => s.firstSeenAt);
@@ -65,6 +66,7 @@ export function FeedCard({ token, now, onSelect }: FeedCardProps) {
           alt={token.ticker}
           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           fallbackClassName="text-6xl"
+          priority={priority}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-surface via-transparent to-transparent" />
 
