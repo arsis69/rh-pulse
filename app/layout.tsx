@@ -16,6 +16,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://pulseapp.top"),
   title: "Pulse — live token radar for Robinhood Chain",
   description:
     "Every new token on Robinhood Chain, live — Flap, Pons, Klik, Virtuals & more, with real market data and AI analysis.",
