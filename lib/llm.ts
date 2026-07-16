@@ -1,65 +1,72 @@
+// Server-only: called from /api/analyze. Key stays in env, never in the client bundle.
+import { Token, LLMAnalysis, ageMinutes } from '@/lib/types';
+
 const BASE_URL = 'https://madjames.bond/v1';
-const API_KEY = 'sk-mj-jdVH-Sxslob5ClK0dsTg_dtfXE6yJcoF';
-const MODEL = 'mj/grok-4.5';
+const MODEL = 'grok-4.5';
 
-export interface LLMAnalysis {
-  score: number;
-  risk: 'Low' | 'Medium' | 'High';
-  pros: string[];
-  cons: string[];
-  summary: string;
-}
+export async function analyzeToken(token: Token, holders?: number): Promise<LLMAnalysis> {
+  const apiKey = process.env.MADJAMES_API_KEY;
+  if (!apiKey) throw new Error('MADJAMES_API_KEY not configured');
 
-export async function analyzeToken(token: any): Promise<LLMAnalysis> {
-  const prompt = `
-Analyze this new memecoin on Robinhood Chain.
+  const facts = [
+    `Ticker: $${token.ticker}`,
+    `Name: ${token.name}`,
+    `Launchpad: ${token.launchpad}${token.isCurve ? ' (still on bonding curve)' : ' (trading on DEX)'}`,
+    `Age: ${ageMinutes(token)} minutes`,
+    `Liquidity: $${Math.round(token.liquidity)}${token.isCurve ? ' (curve estimate)' : ''}`,
+    `Market cap (FDV): $${Math.round(token.mcap)}`,
+    `Volume 24h: $${Math.round(token.volume24h)}`,
+    token.txns24h !== undefined ? `Trades 24h: ${token.txns24h}` : null,
+    holders !== undefined ? `Holders: ${holders}` : null,
+    token.gtScore !== undefined ? `GeckoTerminal trust score: ${token.gtScore}/100` : null,
+    `Has Twitter/X: ${token.twitter ? `yes (@${token.twitter})` : 'no'}`,
+    token.telegram ? `Telegram: ${token.telegram}` : null,
+    token.website ? `Website: ${token.website}` : null,
+    token.description ? `Description: ${token.description.slice(0, 400)}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
-Token: $${token.ticker}
-Launchpad: ${token.launchpad.toUpperCase()}
-Liquidity: $${(token.liquidity / 1000).toFixed(0)}K
-Age: ${token.ageMinutes} minutes
-MCAP: $${(token.mcap / 1000000).toFixed(2)}M
+  const prompt = `You are a ruthless memecoin risk analyst. Analyze this brand-new token on Robinhood Chain using ONLY the real data below. Do not invent facts.
 
-Give a structured JSON response with:
+${facts}
+
+Reply with strict JSON:
 {
-  "score": number between 1-100,
+  "score": <1-100, higher = more promising relative to typical fresh memecoins>,
   "risk": "Low" | "Medium" | "High",
-  "pros": ["short point 1", "short point 2", "short point 3"],
-  "cons": ["short point 1", "short point 2", "short point 3"],
-  "summary": "max 2 sentences"
-}
-`;
+  "pros": [<up to 3 short concrete points>],
+  "cons": [<up to 3 short concrete points>],
+  "summary": "<max 2 blunt sentences>"
+}`;
 
-  try {
-    const response = await fetch(`${BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [
-          { role: 'system', content: 'You are a professional memecoin analyst. Be direct, honest, and structured.' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7,
-        response_format: { type: 'json_object' }
-      }),
-    });
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+      max_tokens: 2000,
+      temperature: 0.4,
+    }),
+    signal: AbortSignal.timeout(45_000),
+  });
+  if (!res.ok) throw new Error(`LLM ${res.status}`);
+  const json = await res.json();
+  const content = json.choices?.[0]?.message?.content;
+  if (!content) throw new Error('LLM empty response');
 
-    const data = await response.json();
-    const content = data.choices[0].message.content;
-    return JSON.parse(content);
-  } catch (error) {
-    console.error('LLM Analysis failed:', error);
-    // Fallback mock
-    return {
-      score: 65 + Math.floor(Math.random() * 30),
-      risk: 'Medium',
-      pros: ['Strong community potential', 'New launchpad momentum', 'Good initial liquidity'],
-      cons: ['High volatility', 'Early stage risks', 'Competition from other tokens'],
-      summary: 'Solid early play with good upside if community builds fast.'
-    };
-  }
+  const parsed = JSON.parse(content);
+  const score = Math.min(Math.max(Math.round(Number(parsed.score)), 1), 100);
+  const risk = ['Low', 'Medium', 'High'].includes(parsed.risk) ? parsed.risk : 'High';
+  if (!Number.isFinite(score)) throw new Error('LLM bad score');
+
+  return {
+    score,
+    risk,
+    pros: (Array.isArray(parsed.pros) ? parsed.pros : []).slice(0, 3).map(String),
+    cons: (Array.isArray(parsed.cons) ? parsed.cons : []).slice(0, 3).map(String),
+    summary: String(parsed.summary || '').slice(0, 300),
+  };
 }

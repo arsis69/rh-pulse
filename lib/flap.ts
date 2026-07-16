@@ -1,11 +1,15 @@
+// Flap Portal indexer — server-side only (imported by /api/feed).
+// Keeps an incremental block cursor in module state; cold start scans a full window.
 import { decodeEventLog, parseAbi } from 'viem';
-import { Token } from '@/lib/types';
+import { Token, TradeEvent } from '@/lib/types';
 import { flapPortalAddress } from '@/lib/chain';
 
 const RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
 const EXPLORER_API = 'https://robinhoodchain.blockscout.com/api';
 const TOKEN_SUPPLY = 1_000_000_000; // Flap tokens launch with fixed 1B supply
-const BLOCK_WINDOW = 60_000; // ~recent history on Robinhood Chain
+const COLD_START_WINDOW = 60_000; // blocks, covers ~1 day
+const MAX_TOKENS = 80;
+const MAX_ACTIVITY = 60;
 
 const TOPIC_CREATED = '0x504e7f360b2e5fe33cbaaae4c593bc55305328341bf79009e43e0e3b7f699603';
 const TOPIC_BOUGHT = '0xa800a2038683844fac66747f771bfdfae862eb28b16bcfa387afa9fbacce8ff7';
@@ -22,125 +26,147 @@ interface RawLog {
   data: `0x${string}`;
 }
 
-async function getLatestBlock(): Promise<number> {
+interface CurveState {
+  createdTs: number;
+  name: string;
+  symbol: string;
+  lastTs: number;
+  lastPriceWei: bigint;
+  volDayEth: number; // rolling, pruned by trade timestamps below
+  trades: { ts: number; eth: number }[];
+  netCurveEth: number;
+}
+
+// module-level indexer state (single Node process behind systemd)
+const curve = new Map<string, CurveState>();
+const activity: TradeEvent[] = [];
+let cursor = 0; // last scanned block
+
+async function rpcBlockNumber(): Promise<number> {
   const res = await fetch(RPC_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 }),
+    cache: 'no-store',
   });
-  const json = await res.json();
-  return parseInt(json.result, 16);
+  return parseInt((await res.json()).result, 16);
 }
 
-async function getPortalLogs(topic0: string, fromBlock: number): Promise<RawLog[]> {
-  const url = `${EXPLORER_API}?module=logs&action=getLogs&fromBlock=${fromBlock}&toBlock=latest&address=${flapPortalAddress}&topic0=${topic0}`;
-  const res = await fetch(url);
+async function getPortalLogs(topic0: string, fromBlock: number, toBlock: number): Promise<RawLog[]> {
+  const url = `${EXPLORER_API}?module=logs&action=getLogs&fromBlock=${fromBlock}&toBlock=${toBlock}&address=${flapPortalAddress}&topic0=${topic0}`;
+  const res = await fetch(url, { cache: 'no-store' });
   const json = await res.json();
   return Array.isArray(json.result) ? json.result : [];
 }
 
-async function getEthUsd(): Promise<number> {
+function decode(log: RawLog) {
+  return decodeEventLog({
+    abi: portalAbi,
+    topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+    data: log.data,
+  });
+}
+
+function applyTrade(log: RawLog, side: 'buy' | 'sell', ethUsd: number) {
   try {
-    const res = await fetch('https://robinhoodchain.blockscout.com/api/v2/stats');
-    const json = await res.json();
-    return parseFloat(json.coin_price) || 0;
+    const { args } = decode(log) as unknown as {
+      args: { ts: bigint; token: string; eth: bigint; postPrice: bigint };
+    };
+    const key = args.token.toLowerCase();
+    const ts = Number(args.ts);
+    const eth = Number(args.eth) / 1e18;
+    const st = curve.get(key);
+    if (st) {
+      if (ts >= st.lastTs) {
+        st.lastTs = ts;
+        st.lastPriceWei = args.postPrice;
+      }
+      st.trades.push({ ts, eth });
+      st.netCurveEth += side === 'buy' ? eth : -eth;
+    }
+    activity.push({ ts, token: args.token, ticker: st?.symbol, side, eth, usd: eth * ethUsd });
   } catch {
-    return 0;
+    /* skip undecodable log */
   }
 }
 
-interface TradeStats {
-  lastTs: number;
-  lastPriceWei: bigint; // wei per whole token
-  volume24hEth: number;
-  netCurveEth: number; // buys minus sells, proxy for curve liquidity
+export interface FlapSnapshot {
+  tokens: Token[];
+  activity: TradeEvent[];
+  launches24h: number;
 }
 
-function scoreToken(t: { ageMinutes: number; volume24h: number; liquidity: number }): number {
-  // Heuristic placeholder until per-token LLM analysis runs (lib/llm.ts)
-  let score = 40;
-  if (t.volume24h > 1000) score += 15;
-  if (t.volume24h > 10000) score += 15;
-  if (t.liquidity > 5000) score += 10;
-  if (t.ageMinutes < 60) score += 10;
-  return Math.min(score, 95);
-}
+export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
+  const latest = await rpcBlockNumber();
+  const from = cursor === 0 ? Math.max(latest - COLD_START_WINDOW, 0) : cursor + 1;
 
-export async function fetchRecentFlapTokens(limit = 30): Promise<Token[]> {
-  const latest = await getLatestBlock();
-  const fromBlock = Math.max(latest - BLOCK_WINDOW, 0);
-
-  const [createdLogs, boughtLogs, soldLogs, ethUsd] = await Promise.all([
-    getPortalLogs(TOPIC_CREATED, fromBlock),
-    getPortalLogs(TOPIC_BOUGHT, fromBlock),
-    getPortalLogs(TOPIC_SOLD, fromBlock),
-    getEthUsd(),
-  ]);
+  if (from <= latest) {
+    const [created, bought, sold] = await Promise.all([
+      getPortalLogs(TOPIC_CREATED, from, latest),
+      getPortalLogs(TOPIC_BOUGHT, from, latest),
+      getPortalLogs(TOPIC_SOLD, from, latest),
+    ]);
+    for (const log of created) {
+      try {
+        const { args } = decode(log) as unknown as {
+          args: { ts: bigint; token: string; name: string; symbol: string };
+        };
+        curve.set(args.token.toLowerCase(), {
+          createdTs: Number(args.ts),
+          name: args.name,
+          symbol: args.symbol,
+          lastTs: 0,
+          lastPriceWei: 0n,
+          volDayEth: 0,
+          trades: [],
+          netCurveEth: 0,
+        });
+      } catch {
+        /* skip */
+      }
+    }
+    bought.forEach((l) => applyTrade(l, 'buy', ethUsd));
+    sold.forEach((l) => applyTrade(l, 'sell', ethUsd));
+    cursor = latest;
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const dayAgo = now - 86400;
-  const trades = new Map<string, TradeStats>();
 
-  const applyTrade = (log: RawLog, sign: 1 | -1) => {
-    try {
-      const { args } = decodeEventLog({
-        abi: portalAbi,
-        topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
-        data: log.data,
-      }) as { args: { ts: bigint; token: string; eth: bigint; postPrice: bigint } };
-      const key = args.token.toLowerCase();
-      const ts = Number(args.ts);
-      const ethAmt = Number(args.eth) / 1e18;
-      const cur = trades.get(key) || { lastTs: 0, lastPriceWei: 0n, volume24hEth: 0, netCurveEth: 0 };
-      if (ts >= cur.lastTs) {
-        cur.lastTs = ts;
-        cur.lastPriceWei = args.postPrice;
-      }
-      if (ts >= dayAgo) cur.volume24hEth += ethAmt;
-      cur.netCurveEth += sign * ethAmt;
-      trades.set(key, cur);
-    } catch {
-      /* skip undecodable log */
-    }
-  };
-  boughtLogs.forEach((l) => applyTrade(l, 1));
-  soldLogs.forEach((l) => applyTrade(l, -1));
+  // prune: keep tokens created in the last 24h, cap map size
+  for (const [key, st] of curve) {
+    if (st.createdTs < dayAgo) curve.delete(key);
+    else st.trades = st.trades.filter((t) => t.ts >= dayAgo);
+  }
+  while (activity.length > MAX_ACTIVITY) activity.shift();
 
   const tokens: Token[] = [];
-  for (const log of createdLogs) {
-    try {
-      const { args } = decodeEventLog({
-        abi: portalAbi,
-        topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
-        data: log.data,
-      }) as { args: { ts: bigint; token: string; name: string; symbol: string; meta: string } };
-      const key = args.token.toLowerCase();
-      const stats = trades.get(key);
-      const priceEth = stats ? Number(stats.lastPriceWei) / 1e18 : 0;
-      const ageMinutes = Math.max(Math.round((now - Number(args.ts)) / 60), 0);
-      const base = {
-        ageMinutes,
-        volume24h: (stats?.volume24hEth || 0) * ethUsd,
-        liquidity: Math.max(stats?.netCurveEth || 0, 0) * ethUsd,
-      };
-      tokens.push({
-        id: key,
-        address: args.token,
-        ticker: args.symbol,
-        name: args.name,
-        launchpad: 'flap',
-        liquidity: base.liquidity,
-        mcap: priceEth * TOKEN_SUPPLY * ethUsd,
-        ageMinutes,
-        volume24h: base.volume24h,
-        llmScore: scoreToken(base),
-        hasX: false,
-      });
-    } catch {
-      /* skip undecodable log */
-    }
+  for (const [key, st] of curve) {
+    const priceEth = Number(st.lastPriceWei) / 1e18;
+    const volEth = st.trades.reduce((s, t) => s + t.eth, 0);
+    tokens.push({
+      id: key,
+      address: key,
+      ticker: st.symbol,
+      name: st.name,
+      launchpad: 'flap',
+      source: 'flap',
+      createdAt: st.createdTs,
+      liquidity: Math.max(st.netCurveEth, 0) * ethUsd,
+      mcap: priceEth * TOKEN_SUPPLY * ethUsd,
+      volume24h: volEth * ethUsd,
+      priceUsd: priceEth * ethUsd || undefined,
+      txns24h: st.trades.length,
+      hasX: false,
+      isCurve: true,
+      scoreSource: null,
+    });
   }
+  tokens.sort((a, b) => b.createdAt - a.createdAt);
 
-  // newest first, cap at limit
-  return tokens.sort((a, b) => a.ageMinutes - b.ageMinutes).slice(0, limit);
+  return {
+    tokens: tokens.slice(0, MAX_TOKENS),
+    activity: [...activity].sort((a, b) => b.ts - a.ts),
+    launches24h: curve.size,
+  };
 }

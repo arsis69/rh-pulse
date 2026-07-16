@@ -1,92 +1,57 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { TokenCard } from '@/components/TokenCard';
+import { useEffect, useMemo, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
+import { Search } from 'lucide-react';
+import { Token, Launchpad } from '@/lib/types';
+import { usePulseStore } from '@/lib/store';
+import { useTokenFeed } from '@/hooks/useTokenFeed';
+import { launchpadColors } from '@/lib/chain';
+import { Nav } from '@/components/Nav';
+import { StatsBar } from '@/components/StatsBar';
+import { TickerTape } from '@/components/TickerTape';
+import { TokenCard } from '@/components/card/TokenCard';
 import { TradeModal } from '@/components/TradeModal';
-import { Token } from '@/lib/types';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { Search, RefreshCw } from 'lucide-react';
-import { fetchRecentFlapTokens } from '@/lib/flap';
 
-const initialTokens: Token[] = [
-  {
-    id: '1',
-    address: '0x1234567890abcdef1234567890abcdef12345678',
-    ticker: 'HOOD',
-    name: 'Robinhood Chain',
-    launchpad: 'flap',
-    liquidity: 245000,
-    mcap: 1250000,
-    ageMinutes: 47,
-    volume24h: 892000,
-    llmScore: 82,
-    hasX: true,
-  },
-  {
-    id: '2',
-    address: '0xabcdef1234567890abcdef1234567890abcdef12',
-    ticker: 'AGENT',
-    name: 'Virtual Agent',
-    launchpad: 'virtuals',
-    liquidity: 98000,
-    mcap: 420000,
-    ageMinutes: 12,
-    volume24h: 310000,
-    llmScore: 91,
-    hasX: true,
-  },
-  {
-    id: '3',
-    address: '0x7890abcdef1234567890abcdef1234567890abcd',
-    ticker: 'BANK',
-    name: 'Bankr Token',
-    launchpad: 'bankr',
-    liquidity: 156000,
-    mcap: 780000,
-    ageMinutes: 89,
-    volume24h: 445000,
-    llmScore: 67,
-    hasX: false,
-  },
-];
+type SortKey = 'newest' | 'score' | 'liquidity' | 'volume';
 
 export default function RHPulse() {
-  const [tokens, setTokens] = useState<Token[]>(initialTokens);
+  useTokenFeed();
+  const tokens = usePulseStore((s) => s.tokens);
   const [search, setSearch] = useState('');
-  const [selectedLaunchpad, setSelectedLaunchpad] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<'newest' | 'score' | 'liquidity'>('newest');
+  const [launchpad, setLaunchpad] = useState<'all' | Launchpad>('all');
+  const [sortBy, setSortBy] = useState<SortKey>('newest');
   const [selectedToken, setSelectedToken] = useState<Token | null>(null);
   const [isTradeOpen, setIsTradeOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
 
-  // Auto-fetch latest tokens from Flap on load (Step 2)
+  // live-ticking clock for ages + NEW badges
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const loadInitialTokens = async () => {
-      setLoading(true);
-      try {
-        const liveTokens = await fetchRecentFlapTokens();
-        if (liveTokens.length > 0) {
-          setTokens(liveTokens);
-        }
-      } catch (e) {
-        console.error('Failed to auto-fetch tokens', e);
-      }
-      setLoading(false);
-    };
-    loadInitialTokens();
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
   }, []);
 
-  const filteredTokens = tokens
-    .filter((t) => {
-      const matchesSearch = t.ticker.toLowerCase().includes(search.toLowerCase()) || t.name.toLowerCase().includes(search.toLowerCase());
-      const matchesLaunchpad = selectedLaunchpad === 'all' || t.launchpad === selectedLaunchpad;
-      return matchesSearch && matchesLaunchpad;
-    })
-    .sort((a, b) => {
-      if (sortBy === 'newest') return a.ageMinutes - b.ageMinutes;
-      if (sortBy === 'score') return b.llmScore - a.llmScore;
-      return b.liquidity - a.liquidity;
-    });
+  const availableLaunchpads = useMemo(() => {
+    const set = new Set(tokens.map((t) => t.launchpad));
+    const order: Launchpad[] = ['flap', 'pons', 'klik', 'virtuals', 'bankr', 'clanker', 'hoodit', 'nock', 'other'];
+    return order.filter((l) => set.has(l));
+  }, [tokens]);
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    return tokens
+      .filter((t) => {
+        const matchesSearch =
+          !q || t.ticker.toLowerCase().includes(q) || t.name.toLowerCase().includes(q) || t.address.toLowerCase() === q;
+        return matchesSearch && (launchpad === 'all' || t.launchpad === launchpad);
+      })
+      .sort((a, b) => {
+        if (sortBy === 'newest') return b.createdAt - a.createdAt;
+        if (sortBy === 'score') return (b.score ?? -1) - (a.score ?? -1);
+        if (sortBy === 'volume') return b.volume24h - a.volume24h;
+        return b.liquidity - a.liquidity;
+      });
+  }, [tokens, search, launchpad, sortBy]);
 
   const handleTrade = (token: Token) => {
     setSelectedToken(token);
@@ -94,71 +59,87 @@ export default function RHPulse() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC]">
-      <nav className="border-b border-[#E2E8F0] bg-white sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-2xl bg-[#0F172A] flex items-center justify-center">
-              <span className="text-white font-bold text-lg tracking-[-1px]">RP</span>
-            </div>
-            <div>
-              <div className="font-semibold text-[21px] tracking-[-0.5px]">RH Pulse</div>
-              <div className="text-[10px] text-[#64748B] -mt-1.5">ROBINHOOD CHAIN</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <ConnectButton />
-          </div>
-        </div>
-      </nav>
+    <div className="min-h-screen">
+      <Nav />
+      <TickerTape />
+      <StatsBar />
 
-      <div className="max-w-7xl mx-auto px-6 pt-10 pb-20">
-        <div className="mb-8">
-          <h1 className="text-6xl font-semibold tracking-[-2.5px]">Live Tokens</h1>
-          <p className="text-[#64748B] mt-3 text-[17px]">Clean discovery for every new token on Robinhood Chain</p>
+      {/* controls */}
+      <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-2 px-4 pb-4 sm:px-6">
+        <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
+          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-3" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search ticker, name, address…"
+            className="w-full rounded-xl border border-edge bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-3"
+          />
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-3 mb-8">
-          <div className="relative flex-1">
-            <Search className="absolute left-4 top-3.5 w-4 h-4 text-[#94A3B8]" />
-            <input
-              type="text"
-              placeholder="Search by ticker or name..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-11 h-12 bg-white border border-[#E2E8F0] rounded-2xl text-[15px] focus:outline-none focus:border-[#0EA5E9]"
+        <div className="flex flex-wrap items-center gap-1.5">
+          <FilterPill active={launchpad === 'all'} color="var(--color-pulse)" label="ALL" onClick={() => setLaunchpad('all')} />
+          {availableLaunchpads.map((l) => (
+            <FilterPill
+              key={l}
+              active={launchpad === l}
+              color={launchpadColors[l]}
+              label={l.toUpperCase()}
+              onClick={() => setLaunchpad(l)}
             />
-          </div>
-
-          <select value={selectedLaunchpad} onChange={(e) => setSelectedLaunchpad(e.target.value)} className="h-12 px-4 bg-white border border-[#E2E8F0] rounded-2xl text-sm min-w-[180px]">
-            <option value="all">All Launchpads</option>
-            <option value="flap">Flap (Yellow)</option>
-            <option value="virtuals">Virtuals</option>
-            <option value="bankr">Bankr</option>
-            <option value="nock">Nock Terminal</option>
-            <option value="pons">Pons</option>
-            <option value="klik">Klik</option>
-          </select>
-
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as any)} className="h-12 px-4 bg-white border border-[#E2E8F0] rounded-2xl text-sm min-w-[170px]">
-            <option value="newest">Newest first</option>
-            <option value="score">Best LLM Score</option>
-            <option value="liquidity">Highest Liquidity</option>
-          </select>
+          ))}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-          {filteredTokens.length > 0 ? (
-            filteredTokens.map((token) => (
-              <TokenCard key={token.id} token={token} onTrade={handleTrade} />
-            ))
-          ) : (
-            <div className="col-span-full py-20 text-center text-[#64748B]">No tokens match your filters.</div>
-          )}
-        </div>
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as SortKey)}
+          className="ml-auto rounded-xl border border-edge bg-surface px-3 py-2 text-xs text-ink-2"
+        >
+          <option value="newest">Newest first</option>
+          <option value="score">Top score</option>
+          <option value="liquidity">Top liquidity</option>
+          <option value="volume">Top volume</option>
+        </select>
       </div>
 
-      <TradeModal token={selectedToken} isOpen={isTradeOpen} onClose={() => { setIsTradeOpen(false); setSelectedToken(null); }} />
+      {/* the card feed */}
+      <main className="mx-auto max-w-[1500px] px-4 pb-16 sm:px-6">
+        {tokens.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
+            <div className="font-display animate-pulse text-sm tracking-widest text-ink-2">TUNING INTO THE CHAIN…</div>
+            <div className="text-xs text-ink-3">first cards land in a few seconds</div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <AnimatePresence mode="popLayout">
+              {filtered.map((token) => (
+                <TokenCard key={token.id} token={token} now={now} onTrade={handleTrade} />
+              ))}
+            </AnimatePresence>
+          </div>
+        )}
+      </main>
+
+      <TradeModal token={selectedToken} isOpen={isTradeOpen} onClose={() => setIsTradeOpen(false)} />
+
+      <footer className="border-t border-edge py-6 text-center text-[10px] text-ink-3">
+        RH Pulse · live data from Robinhood Chain, GeckoTerminal &amp; launchpad contracts · not financial advice
+      </footer>
     </div>
+  );
+}
+
+function FilterPill({ active, color, label, onClick }: { active: boolean; color: string; label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors"
+      style={
+        active
+          ? { color: '#0a0b10', background: color, borderColor: color }
+          : { color, borderColor: `${color}55`, background: 'transparent' }
+      }
+    >
+      {label}
+    </button>
   );
 }

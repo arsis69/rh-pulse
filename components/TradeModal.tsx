@@ -119,15 +119,15 @@ export function TradeModal({ token, isOpen, onClose }: TradeModalProps) {
   const estTokens = quote !== null ? Number(quote) / 1e18 : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-3xl w-full max-w-md shadow-xl border border-[#E2E8F0]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="bg-surface rounded-3xl w-full max-w-md shadow-2xl border border-edge-bright">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-5 border-b">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-edge">
           <div>
-            <div className="font-semibold text-xl">Trade {token.ticker}</div>
-            <div className="text-sm text-[#64748B]">Robinhood Chain • {token.launchpad}</div>
+            <div className="font-display font-bold text-xl">Trade {token.ticker}</div>
+            <div className="text-sm text-ink-3">Robinhood Chain • {token.launchpad}</div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-[#F1F5F9] rounded-xl">
+          <button onClick={onClose} className="p-2 hover:bg-surface-2 rounded-xl text-ink-2">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -135,12 +135,12 @@ export function TradeModal({ token, isOpen, onClose }: TradeModalProps) {
         <div className="p-6 space-y-5">
           {/* Amount */}
           <div>
-            <label className="block text-sm font-medium text-[#64748B] mb-2">Amount (ETH)</label>
+            <label className="block text-sm font-medium text-ink-2 mb-2">Amount (ETH)</label>
             <input
               type="number"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              className="w-full px-4 py-3 text-lg font-mono border border-[#E2E8F0] rounded-2xl focus:outline-none focus:border-[#0EA5E9]"
+              className="w-full px-4 py-3 text-lg num bg-surface-2 border border-edge rounded-2xl text-ink focus:outline-none focus:border-pulse"
               step="0.01"
             />
             <div className="flex gap-2 mt-2">
@@ -148,7 +148,7 @@ export function TradeModal({ token, isOpen, onClose }: TradeModalProps) {
                 <button
                   key={v}
                   onClick={() => setAmount(v.toString())}
-                  className="flex-1 py-2 text-sm rounded-xl border border-[#E2E8F0] hover:bg-[#F8FAFC]"
+                  className="flex-1 py-2 text-sm rounded-xl border border-edge text-ink-2 hover:border-pulse hover:text-pulse"
                 >
                   {v} ETH
                 </button>
@@ -157,10 +157,10 @@ export function TradeModal({ token, isOpen, onClose }: TradeModalProps) {
           </div>
 
           {/* Live quote via portal simulation */}
-          <div className="bg-[#F8FAFC] rounded-2xl p-4 text-sm">
+          <div className="bg-surface-2 rounded-2xl p-4 text-sm border border-edge">
             <div className="flex justify-between mb-1">
-              <span className="text-[#64748B]">You receive (est.)</span>
-              <span className="font-mono font-medium">
+              <span className="text-ink-3">You receive (est.)</span>
+              <span className="num font-medium text-ink">
                 {estTokens !== null
                   ? `~${estTokens.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${token.ticker}`
                   : quoteError
@@ -168,28 +168,28 @@ export function TradeModal({ token, isOpen, onClose }: TradeModalProps) {
                     : 'Fetching quote…'}
               </span>
             </div>
-            <div className="text-xs text-[#94A3B8]">Slippage: 10% max • Flap bonding curve</div>
+            <div className="text-xs text-ink-3">Slippage: 10% max • Flap bonding curve</div>
           </div>
 
           {isSuccess && (
-            <div className="bg-emerald-50 text-emerald-700 rounded-2xl p-3 text-sm font-medium">
+            <div className="bg-up/10 text-up border border-up/30 rounded-2xl p-3 text-sm font-medium">
               Transaction submitted ✓
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-5 border-t flex gap-3">
+        <div className="px-6 py-5 border-t border-edge flex gap-3">
           <button
             onClick={onClose}
-            className="flex-1 py-3 rounded-2xl border border-[#E2E8F0] font-medium hover:bg-[#F8FAFC]"
+            className="flex-1 py-3 rounded-2xl border border-edge-bright font-medium text-ink-2 hover:text-ink"
           >
             Cancel
           </button>
           <button
             onClick={handleBuy}
             disabled={isPending}
-            className="flex-1 py-3 rounded-2xl bg-[#0F172A] text-white font-medium hover:bg-black active:bg-[#111827] disabled:opacity-70"
+            className="font-display flex-1 py-3 rounded-2xl bg-pulse text-bg font-bold hover:brightness-110 active:scale-[0.99] disabled:opacity-60"
           >
             {isPending ? 'Swapping...' : 'Buy with ETH'}
           </button>

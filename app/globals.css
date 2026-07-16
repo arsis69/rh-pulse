@@ -1,21 +1,185 @@
 @import "tailwindcss";
 
-:root {
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+@theme {
+  --color-bg: #0a0b10;
+  --color-surface: #12141c;
+  --color-surface-2: #181b26;
+  --color-edge: #232636;
+  --color-edge-bright: #323752;
+  --color-ink: #eef0f6;
+  --color-ink-2: #a8aec2;
+  --color-ink-3: #6b7189;
+  --color-up: #22c55e;
+  --color-down: #ef4444;
+  --color-pulse: #6ee7ff;
+
+  --font-display: var(--font-unbounded);
+  --font-sans: var(--font-space-grotesk);
+  --font-mono: var(--font-jetbrains-mono);
 }
 
 body {
-  font-feature-settings: "ss02", "ss03";
+  background:
+    radial-gradient(1200px 600px at 70% -10%, rgba(110, 231, 255, 0.06), transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, rgba(157, 111, 255, 0.05), transparent 60%),
+    var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
 }
 
-/* Clean minimal focus styles */
-input:focus, select:focus {
-  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+.font-display {
+  font-family: var(--font-display), var(--font-sans), sans-serif;
+}
+.num {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ---------- 3D card system ---------- */
+.card-scene {
+  perspective: 1200px;
+}
+.card-3d {
+  transform-style: preserve-3d;
+  transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  transition: transform 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  will-change: transform;
+}
+.card-3d.tilting {
+  transition: transform 0.06s linear;
+}
+.card-flip {
+  transform-style: preserve-3d;
+  transition: transform 0.6s cubic-bezier(0.3, 0.8, 0.3, 1);
+}
+.card-flip.flipped {
+  transform: rotateY(180deg);
+}
+.card-face {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.card-back-face {
+  transform: rotateY(180deg);
+}
+
+/* holographic foil — follows pointer via --mx/--my */
+.holo {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: var(--holo-o, 0);
+  background:
+    radial-gradient(
+      420px circle at var(--mx, 50%) var(--my, 50%),
+      rgba(255, 255, 255, 0.5),
+      transparent 45%
+    ),
+    repeating-linear-gradient(
+      115deg,
+      rgba(255, 80, 120, 0.5) 0%,
+      rgba(255, 200, 80, 0.5) 7%,
+      rgba(120, 255, 160, 0.5) 14%,
+      rgba(90, 180, 255, 0.5) 21%,
+      rgba(190, 110, 255, 0.5) 28%,
+      rgba(255, 80, 120, 0.5) 35%
+    );
+  background-position:
+    center,
+    calc(var(--mx, 50%) * 0.6) center;
+  mix-blend-mode: color-dodge;
+  transition: opacity 0.25s ease;
+}
+
+/* one-shot arrival glow */
+@keyframes arrive-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(110, 231, 255, 0.7);
+  }
+  60% {
+    box-shadow: 0 0 42px 8px rgba(110, 231, 255, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(110, 231, 255, 0);
+  }
+}
+.arrive-glow {
+  animation: arrive-glow 2.4s ease-out 2;
+}
+
+@keyframes live-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+.live-dot {
+  animation: live-dot 1.6s ease-in-out infinite;
+}
+
+/* ticker tape marquee */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.marquee {
+  animation: marquee var(--marquee-s, 45s) linear infinite;
+}
+.marquee-wrap:hover .marquee {
+  animation-play-state: paused;
+}
+
+/* scanning shimmer (card back while analyzing) */
+@keyframes scanline {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(400%);
+  }
+}
+.scanline {
+  animation: scanline 1.4s ease-in-out infinite;
+}
+
+/* card back idle pattern */
+.card-back-pattern {
+  background-image: repeating-linear-gradient(
+      45deg,
+      rgba(110, 231, 255, 0.03) 0 2px,
+      transparent 2px 14px
+    ),
+    repeating-linear-gradient(-45deg, rgba(157, 111, 255, 0.03) 0 2px, transparent 2px 14px);
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(110, 231, 255, 0.25);
+}
+
+::selection {
+  background: rgba(110, 231, 255, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-3d,
+  .card-flip {
+    transition: none;
+  }
+  .marquee,
+  .arrive-glow,
+  .scanline {
+    animation: none;
+  }
 }
