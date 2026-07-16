@@ -34,6 +34,7 @@ export interface Token {
   priceChange24h?: number; // percent; curve tokens: change since first trade
   txns24h?: number;
   holders?: number;
+  supply?: number; // whole tokens, from chain
   sparkline?: number[]; // relative price points, oldest → newest
   imageUrl?: string;
   bannerUrl?: string;

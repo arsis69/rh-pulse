@@ -14,6 +14,7 @@ const CHAIN_TTL = 6_000;
 const ETH_TTL = 60_000;
 const INFO_PER_REFRESH = 3;
 const IPFS_PER_REFRESH = 4;
+const CHAIN_META_PER_REFRESH = 5; // Blockscout is generous; supply+holders lookups
 const MAX_TOKENS = 60;
 const IPFS_GATEWAYS = ['https://ipfs.io/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
 
@@ -41,6 +42,8 @@ interface CacheState {
   infoQueue: string[];
   ipfs: Map<string, IpfsMeta | null>; // keyed by token address
   ipfsQueue: { addr: string; cid: string }[];
+  chainMeta: Map<string, { supply?: number; holders?: number } | null>;
+  chainMetaQueue: string[];
   analyses: Map<string, LLMAnalysis | null>; // null = known-missing in DB, analyze pending
   analyzeBusy: boolean;
 }
@@ -61,6 +64,8 @@ const state: CacheState = {
   infoQueue: [],
   ipfs: new Map(),
   ipfsQueue: [],
+  chainMeta: new Map(),
+  chainMetaQueue: [],
   analyses: new Map(),
   analyzeBusy: false,
 };
@@ -156,6 +161,34 @@ async function drainIpfsQueue() {
         });
       } catch {
         state.ipfs.set(addr, null); // don't retry a dead CID every cycle
+      }
+    }),
+  );
+}
+
+// On-chain token meta (real supply + holders) via Blockscout — GT's fdv_usd is
+// often stale for brand-new pools, so mcap is computed as live price × supply.
+async function drainChainMetaQueue() {
+  const batch = state.chainMetaQueue.splice(0, CHAIN_META_PER_REFRESH);
+  await Promise.all(
+    batch.map(async (addr) => {
+      if (state.chainMeta.has(addr)) return;
+      try {
+        const res = await fetch(`https://robinhoodchain.blockscout.com/api/v2/tokens/${addr}`, {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(6_000),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const t = await res.json();
+        const decimals = parseInt(t.decimals) || 18;
+        const supply = t.total_supply ? Number(BigInt(t.total_supply) / BigInt(10) ** BigInt(decimals)) : undefined;
+        const holders = parseInt(t.holders_count);
+        state.chainMeta.set(addr, {
+          supply: Number.isFinite(supply) ? supply : undefined,
+          holders: Number.isFinite(holders) ? holders : undefined,
+        });
+      } catch {
+        state.chainMeta.delete(addr); // transient — requeue on next merge
       }
     }),
   );
@@ -310,6 +343,21 @@ function mergeTokens(): Token[] {
         state.ipfsQueue.push({ addr: t.id, cid: t.metaCid });
       }
     }
+    // real supply + holders from chain; recompute mcap from live price since
+    // GT fdv_usd is unreliable for fresh pools (e.g. stale 10M-supply values)
+    if (t.source === 'gecko') {
+      const cm = state.chainMeta.get(t.id);
+      if (cm) {
+        t.supply = cm.supply;
+        t.holders = t.holders ?? cm.holders;
+      } else if (!state.chainMetaQueue.includes(t.id)) {
+        state.chainMetaQueue.push(t.id);
+      }
+      if (t.priceUsd && t.priceUsd > 0) {
+        t.mcap = t.priceUsd * (t.supply ?? 1_000_000_000);
+      }
+    }
+
     t.hasX = Boolean(t.twitter);
 
     // attach AI analysis
@@ -326,7 +374,7 @@ function mergeTokens(): Token[] {
 export async function buildFeedPayload(): Promise<FeedPayload> {
   await refreshEth();
   await Promise.all([refreshGecko(), refreshDexTopUps(), refreshChain()]);
-  await Promise.all([drainInfoQueue(), drainIpfsQueue()]);
+  await Promise.all([drainInfoQueue(), drainIpfsQueue(), drainChainMetaQueue()]);
 
   let tokens = mergeTokens();
   await loadKnownAnalyses(tokens);
