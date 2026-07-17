@@ -80,6 +80,7 @@ interface CacheState {
   xQueue: string[];
   analyses: Map<string, CachedAnalysis | null>; // null = claimed, analysis in flight
   reanalyzing: Set<string>; // milestone refresh in flight — old text stays visible
+  refreshInflight: number;
   analyzeInflight: number;
   analyzeCandidates: Token[];
   analyzeFailAt: Map<string, number>;
@@ -131,6 +132,7 @@ const state: CacheState = {
   xQueue: [],
   analyses: new Map(),
   reanalyzing: new Set(),
+  refreshInflight: 0,
   analyzeInflight: 0,
   analyzeCandidates: [],
   analyzeFailAt: new Map(),
@@ -510,6 +512,7 @@ async function loadKnownAnalyses(tokens: Token[]) {
 const ANALYZE_CONCURRENCY = 6;
 const ANALYZE_RETRY_MS = 60_000; // don't hammer the LLM on a failing token
 const MODEL_TAG = 'grok-4.5-low';
+const REFRESH_SLOTS = 2; // of ANALYZE_CONCURRENCY, held open for stale refreshes
 
 // What the token looked like when we last described it. Stored with the analysis
 // so we can tell whether the words are still true.
@@ -542,9 +545,12 @@ function isStale(t: Token, cached: CachedAnalysis): boolean {
   const age = ageMinutes(t);
   const analyzedAgeMin = cached.analyzedAt ? (Date.now() / 1000 - cached.analyzedAt) / 60 : Infinity;
 
-  // socials arrived after we said it had none — the single biggest source of
-  // factually wrong analyses
-  if (!prevSocials && (t.twitter || t.telegram || t.website)) return true;
+  // Socials arrived after we said it had none — the single biggest source of
+  // factually wrong analyses. Only worth an LLM call on a token someone is
+  // actually touching: enrichment lands late for nearly every launch, so without
+  // this gate ~15 ghosts a minute queue up and crowd out the tokens that moved.
+  const alive = (t.volume24h ?? 0) > 0 || (t.holders ?? 0) > 2;
+  if (alive && !prevSocials && (t.twitter || t.telegram || t.website)) return true;
   // it actually started trading
   if ((t.volume24h ?? 0) >= 1_000 && prevVol < 1_000) return true;
   if ((t.volume24h ?? 0) > prevVol * 5 && (t.volume24h ?? 0) > 200) return true;
@@ -559,24 +565,44 @@ function isStale(t: Token, cached: CachedAnalysis): boolean {
 function pumpAnalyze() {
   while (state.analyzeInflight < ANALYZE_CONCURRENCY) {
     const ready = (t: Token) => Date.now() - (state.analyzeFailAt.get(t.id) ?? 0) > ANALYZE_RETRY_MS;
-    // First analyses win: a card must never reach the board unanalyzed. Stale
-    // refreshes fill the spare capacity behind them.
-    let next = state.analyzeCandidates.find((t) => !state.analyses.has(t.id) && ready(t));
+    const firstCandidate = state.analyzeCandidates.find((t) => !state.analyses.has(t.id) && ready(t));
+    // Refresh the token that matters most, not the newest. analyzeCandidates is
+    // newest-first, so `.find()` handed the slot to whichever ghost had just
+    // picked up a social link while a token that 27x'd its volume waited behind it.
+    let refreshCandidate: Token | undefined;
+    for (const t of state.analyzeCandidates) {
+      if (state.reanalyzing.has(t.id) || !ready(t)) continue;
+      const a = state.analyses.get(t.id);
+      if (!a || !isStale(t, a as CachedAnalysis)) continue;
+      if (!refreshCandidate || (t.volume24h ?? 0) > (refreshCandidate.volume24h ?? 0)) refreshCandidate = t;
+    }
+
+    // Refreshes get reserved workers. Letting first-analyses win outright starved
+    // them completely: ~15 tokens launch per minute, so the new-launch queue is
+    // never empty and a refresh never got a turn — a token that 27x'd its volume
+    // in six minutes still described its first $965. An unanalyzed card is merely
+    // hidden for a moment; a stale one is visible and wrong.
+    let next: Token | undefined;
     let refresh = false;
-    if (!next) {
-      next = state.analyzeCandidates.find((t) => {
-        if (state.reanalyzing.has(t.id) || !ready(t)) return false;
-        const a = state.analyses.get(t.id);
-        return Boolean(a) && isStale(t, a as CachedAnalysis);
-      });
-      refresh = Boolean(next);
+    if (refreshCandidate && state.refreshInflight < REFRESH_SLOTS) {
+      next = refreshCandidate;
+      refresh = true;
+    } else if (firstCandidate) {
+      next = firstCandidate;
+    } else if (refreshCandidate) {
+      next = refreshCandidate;
+      refresh = true;
     }
     if (!next) return;
     const token = next;
     // Claim before any await so parallel workers can't collide. A refresh keeps
     // the existing text on the card while it re-runs — never blank a live card.
-    if (refresh) state.reanalyzing.add(token.id);
-    else state.analyses.set(token.id, null);
+    if (refresh) {
+      state.reanalyzing.add(token.id);
+      state.refreshInflight++;
+    } else {
+      state.analyses.set(token.id, null);
+    }
     state.analyzeInflight++;
     void (async () => {
       try {
@@ -601,7 +627,10 @@ function pumpAnalyze() {
         state.analyzeErrors.push(`${token.ticker}: ${e instanceof Error ? e.message : String(e)}`);
         if (state.analyzeErrors.length > 20) state.analyzeErrors.shift();
       } finally {
-        state.reanalyzing.delete(token.id);
+        if (refresh) {
+          state.reanalyzing.delete(token.id);
+          state.refreshInflight--;
+        }
         state.analyzeInflight--;
         pumpAnalyze();
       }
@@ -619,11 +648,17 @@ export function getAnalyzeDebug() {
   let claimed = 0;
   let done = 0;
   for (const v of state.analyses.values()) v === null ? claimed++ : done++;
+  const stale = state.analyzeCandidates.filter((t) => {
+    const a = state.analyses.get(t.id);
+    return Boolean(a) && isStale(t, a as CachedAnalysis);
+  });
   return {
     inflight: state.analyzeInflight,
+    refreshInflight: state.refreshInflight,
     candidates: state.analyzeCandidates.length,
     claimed,
     done,
+    staleCount: stale.length,
     failed: state.analyzeFailAt.size,
     lastErrors: state.analyzeErrors.slice(-5),
   };
