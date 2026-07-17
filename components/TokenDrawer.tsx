@@ -55,7 +55,10 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="fixed inset-x-0 bottom-0 z-50 h-auto max-h-[85vh] overflow-hidden rounded-t-3xl border-t border-edge bg-surface shadow-2xl sm:inset-y-0 sm:bottom-auto sm:left-auto sm:right-0 sm:h-full sm:w-full sm:max-w-md sm:rounded-none sm:border-l sm:border-t-0"
+            // full height, never truncated: top+bottom both pinned so the inner
+            // area owns the scroll (the old max-h-[85vh] applied at every
+            // breakpoint and cut the panel — and its content — at 85% of screen)
+            className="fixed inset-x-0 bottom-0 top-12 z-50 flex flex-col overflow-hidden rounded-t-2xl border border-edge bg-surface shadow-2xl sm:inset-y-2 sm:left-auto sm:right-2 sm:top-2 sm:w-full sm:max-w-md sm:rounded-2xl"
           >
             <div className="flex h-full flex-col">
               {/* header */}

@@ -29,6 +29,7 @@ const CHAIN_META_PER_REFRESH = 5; // Blockscout is generous; supply+holders look
 // before being flushed, so a "10 minutes ago" launch was already invisible
 const MAX_TOKENS = 180;
 const SEEN_GECKO_MAX = 400;
+const ANALYSIS_GRACE_SEC = 90; // safety valve: never hide a card longer than this waiting on the LLM
 // cloudflare-ipfs.com is dead (sunset 2024) and pinata's public gateway rate-limits hard — keep it last
 const IPFS_GATEWAYS = [
   'https://ipfs.io/ipfs/',
@@ -68,12 +69,16 @@ interface CacheState {
   ipfsQueue: { addr: string; cid: string }[];
   chainMeta: Map<string, { supply?: number; holders?: number } | null>;
   chainMetaQueue: string[];
-  analyses: Map<string, LLMAnalysis | null>; // null = known-missing in DB, analyze pending
-  analyzeBusy: boolean;
+  analyses: Map<string, LLMAnalysis | null>; // null = claimed, analysis in flight
+  analyzeInflight: number;
+  analyzeCandidates: Token[];
+  analyzeFailAt: Map<string, number>;
+  analyzeErrors: string[];
   // whale/smart-money events retained separately — the rolling trade tape churns
   // in seconds on this chain, so rare big buys must not be flushed with it
   whaleEvents: Map<string, TradeEvent>;
   prewarmQueue: string[]; // upstream image refs to pull into the cache before viewers ask
+  lastTokens: Token[]; // ungated merged view (pre analysis-gate), for /api/analyze lookups
   dsInfo: Map<string, GTTokenInfo | null>; // DexScreener image/social enrichment
   dsInfoAt: number;
   dsProfiles: Map<string, GTTokenInfo | null>; // DexScreener latest-profiles cache
@@ -110,9 +115,13 @@ const state: CacheState = {
   chainMeta: new Map(),
   chainMetaQueue: [],
   analyses: new Map(),
-  analyzeBusy: false,
+  analyzeInflight: 0,
+  analyzeCandidates: [],
+  analyzeFailAt: new Map(),
+  analyzeErrors: [],
   whaleEvents: new Map(),
   prewarmQueue: [],
+  lastTokens: [],
   dsInfo: new Map(),
   dsInfoAt: 0,
   dsProfiles: new Map(),
@@ -426,30 +435,62 @@ async function loadKnownAnalyses(tokens: Token[]) {
   }
 }
 
-// Server-side auto-analysis: one token per refresh cycle, newest first.
-// Cards arrive pre-analyzed for every viewer; Supabase is the global cache.
-function kickAnalyzeDrip(tokens: Token[]) {
-  if (state.analyzeBusy) return;
-  const next = tokens.find((t) => !state.analyses.has(t.id));
-  if (!next) return;
-  state.analyzeBusy = true;
-  (async () => {
-    try {
-      const cached = await getAnalysis(next.id);
-      if (cached) {
-        state.analyses.set(next.id, cached);
-        return;
+// Server-side auto-analysis worker pool. Cards must reach the board already
+// analyzed, so throughput has to beat the launch rate (~15/min): one job per
+// 8s cycle (the old drip) could never catch up and left most cards unanalyzed.
+// Workers re-pump themselves on completion instead of waiting for the next cycle.
+const ANALYZE_CONCURRENCY = 6;
+const ANALYZE_RETRY_MS = 60_000; // don't hammer the LLM on a failing token
+
+function pumpAnalyze() {
+  while (state.analyzeInflight < ANALYZE_CONCURRENCY) {
+    const next = state.analyzeCandidates.find(
+      (t) => !state.analyses.has(t.id) && Date.now() - (state.analyzeFailAt.get(t.id) ?? 0) > ANALYZE_RETRY_MS,
+    );
+    if (!next) return;
+    state.analyses.set(next.id, null); // claim before any await so parallel workers can't collide
+    state.analyzeInflight++;
+    void (async () => {
+      try {
+        const cached = await getAnalysis(next.id);
+        if (cached) {
+          state.analyses.set(next.id, cached);
+          return;
+        }
+        const analysis = await analyzeToken(next, next.holders);
+        state.analyses.set(next.id, analysis);
+        await saveAnalysis(next.id, analysis, 'grok-4.5-low');
+      } catch (e) {
+        state.analyses.delete(next.id);
+        state.analyzeFailAt.set(next.id, Date.now());
+        state.analyzeErrors.push(`${next.ticker}: ${e instanceof Error ? e.message : String(e)}`);
+        if (state.analyzeErrors.length > 20) state.analyzeErrors.shift();
+      } finally {
+        state.analyzeInflight--;
+        pumpAnalyze();
       }
-      state.analyses.set(next.id, null); // claimed
-      const analysis = await analyzeToken(next, next.holders);
-      state.analyses.set(next.id, analysis);
-      await saveAnalysis(next.id, analysis, 'grok-4.5-low');
-    } catch {
-      state.analyses.delete(next.id); // retry on a later cycle
-    } finally {
-      state.analyzeBusy = false;
-    }
-  })();
+    })();
+  }
+}
+
+// newest first: the cards people actually watch get analyzed before they land
+function kickAnalyzeDrip(tokens: Token[]) {
+  state.analyzeCandidates = [...tokens].sort((a, b) => b.createdAt - a.createdAt);
+  pumpAnalyze();
+}
+
+export function getAnalyzeDebug() {
+  let claimed = 0;
+  let done = 0;
+  for (const v of state.analyses.values()) v === null ? claimed++ : done++;
+  return {
+    inflight: state.analyzeInflight,
+    candidates: state.analyzeCandidates.length,
+    claimed,
+    done,
+    failed: state.analyzeFailAt.size,
+    lastErrors: state.analyzeErrors.slice(-5),
+  };
 }
 
 export function setAnalysisInCache(address: string, analysis: LLMAnalysis) {
@@ -836,10 +877,15 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
     state.flap.tokens.filter((t) => t.createdAt >= hourAgo).length +
     state.klik.launches.filter((l) => l.createdAt >= hourAgo).length +
     state.geckoTokens.filter((t) => t.createdAt >= hourAgo && t.launchpad !== 'flap').length;
-  const hot = [...tokens].sort((a, b) => b.volume24h - a.volume24h)[0];
+  // Cards go live pre-analyzed: opening one must never show a spinner. The age
+  // valve keeps the board from going blank if the LLM is down or backed up —
+  // in normal operation the worker pool analyzes a launch within seconds.
+  state.lastTokens = tokens;
+  const visible = tokens.filter((t) => t.analysis || Date.now() / 1000 - t.createdAt > ANALYSIS_GRACE_SEC);
+  const hot = [...visible].sort((a, b) => b.volume24h - a.volume24h)[0];
 
   return {
-    tokens,
+    tokens: visible,
     activity,
     whales,
     stats: {
@@ -852,10 +898,11 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   };
 }
 
-// Snapshot for the analyze route: current merged view of one token.
+// Snapshot for the analyze route: search the ungated list so a token still
+// waiting on its first analysis is findable.
 export async function getCachedToken(address: string): Promise<Token | undefined> {
-  const payload = await buildFeedPayload();
-  return payload.tokens.find((t) => t.id === address.toLowerCase());
+  await buildFeedPayload();
+  return state.lastTokens.find((t) => t.id === address.toLowerCase());
 }
 
 // Background heartbeat: keep indexing + analyzing new launches even with zero
