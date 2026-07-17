@@ -14,7 +14,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { Token } from '@/lib/types';
-import { fmtUsd, fmtAge } from '@/lib/format';
+import { fmtUsd, fmtAge, cleanDescription } from '@/lib/format';
 import { gmgnUrl, safeHttpUrl, safeSocialUrl } from '@/lib/geckoShared';
 import { scoreColor } from '@/lib/score';
 import { TokenImage } from '@/components/ui/TokenImage';
@@ -124,19 +124,9 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                       </div>
                     </div>
 
-                    {token.scoreFlags && token.scoreFlags.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {token.scoreFlags.map((f) => (
-                          <span
-                            key={f}
-                            className="rounded-md bg-down/15 px-1.5 py-0.5 text-[11px] font-semibold text-down"
-                          >
-                            ⚠ {f}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
+                    {/* Warning chips are hidden for now (they still cap the score
+                        and feed the AI) — concentration needs to settle after the
+                        contract-holder fix before we surface it as a hard claim. */}
                     {token.scoreParts && token.scoreParts.length > 0 && (
                       <div className="mt-3 space-y-2.5 border-t border-edge pt-3">
                         {/* detail sits on its own line: squeezed into a column it
@@ -197,8 +187,12 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                 {/* contract */}
                 <ContractBox address={token.address} />
 
-                {/* description */}
-                {token.description && <p className="text-[13px] leading-relaxed text-ink-2">{token.description}</p>}
+                {/* description — sources hard-truncate it, so never show a severed word */}
+                {token.description && (
+                  <p className="whitespace-pre-line text-[13px] leading-relaxed text-ink-2">
+                    {cleanDescription(token.description)}
+                  </p>
+                )}
 
                 {/* ai analysis */}
                 <div className="rounded-2xl border border-edge bg-surface-2 p-4">

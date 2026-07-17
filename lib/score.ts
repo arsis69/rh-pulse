@@ -91,16 +91,21 @@ function rel(value: number, boardRef: number, floor: number): number {
 /**
  * How much to discount Distribution for concentrated supply.
  *
- * The old curve ran 1.0 at 40% down to ~0 at 95%, which handed 49% concentration
- * 17/20 (near-perfect) and 89% just 2/20 — a 7.6x swing across two tokens that
- * are both simply "early". Measured reality: the MEDIAN token on this board has
- * its top 10 holding 100% of supply, so 89% is around average here and 49% is
- * genuinely top-decile. The curve now starts biting earlier (nothing is
- * "perfectly distributed" at 40%) but bottoms out at 0.3 instead of 0, because
- * concentration alone shouldn't erase a token that has real holders and volume.
- * Extreme cases are still caught hard by the top1 > 50% flag, which caps the
- * whole score at 45.
+ * Input is the top wallets' share of TOTAL supply (pools/curves excluded from the
+ * numerator, included in the denominator), so a token still sitting in its curve
+ * scores near 0% here and is simply judged on holder count instead.
+ *
+ * The old curve ran 1.0 at 40% down to ~0 at 95%, a 7.6x swing between two
+ * tokens that were both just early. It bottoms out at 0.3 now, not 0, because
+ * concentration alone shouldn't erase a token with real holders and volume —
+ * a genuine whale (top1 > 50% of supply) is still capped hard at 45.
  */
+// sub-1% concentration is normal for a token still mostly inside its curve
+function fmtPct0(v: number): string {
+  if (v > 0 && v < 1) return '<1%';
+  return `${v.toFixed(0)}%`;
+}
+
 function concentrationMultiplier(top10Pct: number): number {
   const CLEAN = 20; // below this, genuinely well spread
   const HEAVY = 90; // at/above this, effectively one pocket
@@ -177,7 +182,10 @@ export function computeChainScore(token: Token, board: BoardStats): ChainScore {
   if (holders !== undefined) {
     dist = rel(holders, board.holdersRef, HOLDERS_FLOOR);
     if (top10 !== undefined) dist *= concentrationMultiplier(top10);
-    distDetail = `${holders} holders · top 10 hold ${top10 !== undefined ? `${top10.toFixed(0)}%` : '—'}`;
+    distDetail =
+      top10 !== undefined
+        ? `${holders} holders · top 10 wallets hold ${fmtPct0(top10)} of supply`
+        : `${holders} holders`;
   }
   add('Distribution', 20, dist, distDetail);
 

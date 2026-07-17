@@ -87,16 +87,7 @@ export function FeedCard({ token, now, onSelect, priority }: FeedCardProps) {
           {token.launchpad}
         </span>
 
-        {/* hard warnings belong on the card, not buried in the drawer */}
-        {token.scoreFlags && token.scoreFlags.length > 0 && (
-          <span
-            className="absolute right-2.5 top-2.5 rounded-md px-1.5 py-0.5 text-[10px] font-bold text-down"
-            style={{ background: 'rgba(8,9,11,0.85)' }}
-            title={token.scoreFlags.join(' · ')}
-          >
-            ⚠ {token.scoreFlags.length}
-          </span>
-        )}
+        {/* warning badge hidden for now — see TokenDrawer */}
       </div>
 
       {/* identity */}

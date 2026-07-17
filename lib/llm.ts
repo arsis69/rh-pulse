@@ -1,5 +1,6 @@
 // Server-only: called from /api/analyze. Key stays in env, never in the client bundle.
 import { Token, LLMAnalysis, ageMinutes } from '@/lib/types';
+import { cleanDescription } from '@/lib/format';
 
 const BASE_URL = 'https://madjames.bond/v1';
 const MODEL = 'grok-4.5-low'; // low reasoning effort: fast + cheap, plenty for this
@@ -44,7 +45,13 @@ async function callLLM(prompt: string, apiKey: string, attempt: number): Promise
 // v3: dropped the dormant creator-tax and serial-deployer warnings from the
 // fact block — they fired on ~60% of the board and the tax isn't even charged,
 // so analyses written against v2 cite a 10% tax nobody pays.
-export const PROMPT_VERSION = 3;
+// v4: concentration now excludes contract holders (pools/curves/launch
+// contracts), so every "N% held by one wallet" claim written against v3 is
+// wrong — it was usually describing the token's own liquidity.
+// v5: concentration is a share of TOTAL supply and the fact block says so —
+// v4 still called it "of wallet-held supply", so the model read 0% as "full
+// holder concentration".
+export const PROMPT_VERSION = 5;
 
 function describeX(token: Token): string {
   const x = token.xSignal;
@@ -79,9 +86,17 @@ export async function analyzeToken(token: Token, holders?: number): Promise<LLMA
     }`,
     token.buys24h !== undefined ? `Trades 24h: ${token.buys24h} buys / ${token.sells24h ?? 0} sells` : null,
     h !== undefined ? `Holders: ${h}` : 'Holders: unknown (not fetched yet)',
+    // Shares are of TOTAL supply, with pools/curves/launch contracts excluded
+    // from the numerator but counted in the denominator. Low numbers here mean
+    // "most supply is still in the curve", NOT "concentrated" — spell that out,
+    // because the model was reading 0% as "full holder concentration".
     token.top10Pct !== undefined
-      ? `Holder concentration (pool excluded): top wallet ${(token.top1Pct ?? 0).toFixed(1)}%, top 10 ${token.top10Pct.toFixed(1)}% of supply`
-      : null,
+      ? `Holder concentration: the largest single wallet holds ${(token.top1Pct ?? 0).toFixed(2)}% of TOTAL supply and the top 10 wallets hold ${token.top10Pct.toFixed(2)}%. Liquidity pools, bonding curves and launch contracts are NOT counted as holders — they are not whales.${
+          token.walletHeldPct !== undefined
+            ? ` Only ${token.walletHeldPct.toFixed(1)}% of supply has left the curve/pool into wallets so far, which is normal for a young token — a LOW concentration number here means undistributed, not risky.`
+            : ''
+        }`
+      : 'Holder concentration: unknown (no supply in wallets yet, or not fetched)',
     token.deployerLaunches !== undefined
       ? `Deployer has launched ${token.deployerLaunches} token(s) that we've indexed`
       : null,
@@ -89,7 +104,7 @@ export async function analyzeToken(token: Token, holders?: number): Promise<LLMA
     describeX(token),
     token.telegram ? `Telegram: yes` : null,
     token.website ? `Website: yes` : null,
-    token.description ? `Description: ${token.description.slice(0, 400)}` : null,
+    token.description ? `Description: ${cleanDescription(token.description).slice(0, 400)}` : null,
     '',
     `Pulse chain score (already computed from the data above): ${token.score}/100`,
     token.scoreParts?.length

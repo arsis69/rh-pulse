@@ -10,6 +10,28 @@ export function fmtUsd(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
+/**
+ * Descriptions arrive pre-truncated by their source — the virtuals API hard-cuts
+ * at exactly 500 chars server-side (even its detail endpoint), so text lands
+ * mid-word: "…confidence, coverage, and reproducible evi". The full text does not
+ * exist to fetch. Cut back to the last sentence, or failing that the last whole
+ * word, and mark it elided rather than showing a severed word.
+ */
+export function cleanDescription(raw: string): string {
+  const s = raw.replace(/\n{3,}/g, '\n\n').trim();
+  if (!s) return s;
+  // Only text ending mid-word is suspect. Checking for terminal punctuation
+  // instead treats "…rug pulls solidly on Solana! ⚡" as truncated and eats the
+  // emoji — plenty of these end on an emoji, a quote or a bracket.
+  if (!/[\p{L}\p{N}]$/u.test(s)) return s;
+
+  const sentenceEnd = Math.max(s.lastIndexOf('. '), s.lastIndexOf('! '), s.lastIndexOf('? '));
+  // only trust a sentence break if it doesn't throw away most of the text
+  if (sentenceEnd > s.length * 0.6) return s.slice(0, sentenceEnd + 1);
+  const lastSpace = s.lastIndexOf(' ');
+  return `${(lastSpace > 0 ? s.slice(0, lastSpace) : s).replace(/[,;:]$/, '')}…`;
+}
+
 export function fmtAge(createdAt: number, now = Date.now()): string {
   const s = Math.max(Math.floor(now / 1000 - createdAt), 0);
   if (s < 60) return `${s}s`;

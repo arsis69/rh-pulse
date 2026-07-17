@@ -845,9 +845,12 @@ async function mergeTokens(): Promise<Token[]> {
     // Holder concentration — only worth a call once a token has any traction
     const hs = state.holderStats.get(t.id);
     if (hs) {
-      t.holders = t.holders ?? hs.holders;
+      // concentration is measured among real wallets only (contracts — pools,
+      // curves, bankr's launch contract — are not whales)
       t.top1Pct = hs.top1Pct;
       t.top10Pct = hs.top10Pct;
+      t.walletHeldPct = hs.walletHeldPct;
+      t.holders = t.holders ?? hs.realHolders;
     } else if (
       hs === undefined &&
       (t.volume24h > 0 || (t.holders ?? 0) > 2) &&

@@ -59,8 +59,12 @@ export interface Token {
   buys24h?: number; // kept split from sells — sell-heavy tape is a dump signal
   sells24h?: number;
   holders?: number;
-  top1Pct?: number; // largest holder's share of supply, pool/burn excluded
+  // Share of TOTAL supply held by the largest real wallets. Pools, curves and
+  // launch contracts are excluded from the numerator but counted in the
+  // denominator, so an untraded curve token reads ~0% rather than "100%".
+  top1Pct?: number;
   top10Pct?: number;
+  walletHeldPct?: number; // how much supply has actually left the curve/pool
   deployer?: string; // creator address from the launch event
   deployerLaunches?: number; // how many tokens this address has launched
   buyTax?: number; // percent; creator-set, currently NOT enforced on curve trades
