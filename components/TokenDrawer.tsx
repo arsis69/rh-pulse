@@ -16,8 +16,15 @@ import {
 import { Token } from '@/lib/types';
 import { fmtUsd, fmtAge } from '@/lib/format';
 import { gmgnUrl, safeHttpUrl, safeSocialUrl } from '@/lib/geckoShared';
+import { scoreColor } from '@/lib/score';
 import { TokenImage } from '@/components/ui/TokenImage';
 import { useTokenAnalysis } from '@/hooks/useTokenAnalysis';
+
+const RISK_COLOR: Record<string, string> = {
+  Low: 'var(--color-up)',
+  Medium: 'var(--color-legendary)',
+  High: 'var(--color-down)',
+};
 
 interface TokenDrawerProps {
   token: Token | null;
@@ -101,38 +108,56 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                   />
                 </div>
 
-                {/* trust score hero */}
+                {/* trust score hero + why it's that number */}
                 {token.score !== undefined && token.scoreSource != null && (
-                  <div
-                    className="flex items-center justify-between rounded-2xl border border-edge bg-surface-2 p-4"
-                    title={token.scoreSource === 'llm' ? 'AI-generated score' : 'GeckoTerminal trust score'}
-                  >
-                    <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-3">Trust score</div>
-                      <div className="mt-1 text-[13px] text-ink-2">
-                        {token.scoreSource === 'llm'
-                          ? 'AI + live chain data'
-                          : token.scoreSource === 'gt'
-                            ? 'GeckoTerminal'
-                            : 'On-chain metrics'}
+                  <div className="rounded-2xl border border-edge bg-surface-2 p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-3">Trust score</div>
+                        <div className="mt-1 text-[13px] text-ink-2">Live chain signals · ranked vs the board</div>
+                      </div>
+                      <div
+                        className="num flex h-12 w-12 items-center justify-center rounded-xl text-[20px] font-bold"
+                        style={{ color: scoreColor(token.score), background: 'var(--color-surface)' }}
+                      >
+                        {token.score}
                       </div>
                     </div>
-                    <div
-                      className="num flex h-12 w-12 items-center justify-center rounded-xl text-[20px] font-bold"
-                      style={{
-                        color:
-                          token.score >= 80
-                            ? 'var(--color-up)'
-                            : token.score >= 60
-                              ? 'var(--color-legendary)'
-                              : token.score >= 40
-                                ? 'var(--color-pulse)'
-                                : 'var(--color-down)',
-                        background: 'var(--color-surface)',
-                      }}
-                    >
-                      {token.score}
-                    </div>
+
+                    {token.scoreFlags && token.scoreFlags.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {token.scoreFlags.map((f) => (
+                          <span
+                            key={f}
+                            className="rounded-md bg-down/15 px-1.5 py-0.5 text-[11px] font-semibold text-down"
+                          >
+                            ⚠ {f}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {token.scoreParts && token.scoreParts.length > 0 && (
+                      <div className="mt-3 space-y-1.5 border-t border-edge pt-3">
+                        {token.scoreParts.map((p) => (
+                          <div key={p.label} className="flex items-center gap-2">
+                            <div className="w-[92px] shrink-0 text-[11px] text-ink-2">{p.label}</div>
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
+                              <div
+                                className="h-full rounded-full bg-pulse"
+                                style={{ width: `${p.weight ? (p.value / p.weight) * 100 : 0}%` }}
+                              />
+                            </div>
+                            <div className="num w-[42px] shrink-0 text-right text-[11px] text-ink-3">
+                              {p.value}/{p.weight}
+                            </div>
+                            <div className="hidden w-[130px] shrink-0 truncate text-[10px] text-ink-3 sm:block" title={p.detail}>
+                              {p.detail}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -201,44 +226,20 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
 
                   {analysis && !pending && (
                     <div className="mt-4 space-y-4">
+                      {/* the model gives the verdict + the words; the number is
+                          the deterministic chain score shown above */}
                       <div className="flex items-center gap-3">
                         <div
-                          className="num flex h-12 w-12 items-center justify-center rounded-xl text-[20px] font-bold"
+                          className="flex h-12 items-center justify-center rounded-xl px-3 text-[14px] font-bold"
                           style={{
-                          color:
-                            analysis.score >= 80
-                              ? 'var(--color-up)'
-                              : analysis.score >= 60
-                                ? 'var(--color-legendary)'
-                                : analysis.score >= 40
-                                  ? 'var(--color-pulse)'
-                                  : 'var(--color-down)',
+                            color: RISK_COLOR[analysis.risk],
                             background: 'var(--color-surface)',
                           }}
                         >
-                          {analysis.score}
+                          {analysis.risk} risk
                         </div>
-                        <div>
-                          <div
-                            className="text-[14px] font-bold"
-                            style={{
-                              color:
-                                analysis.score >= 80
-                                  ? 'var(--color-up)'
-                                  : analysis.score >= 60
-                                    ? 'var(--color-legendary)'
-                                    : analysis.score >= 40
-                                      ? 'var(--color-pulse)'
-                                      : 'var(--color-down)',
-                            }}
-                          >
-                            {analysis.score >= 80
-                              ? 'Low'
-                              : analysis.score >= 40
-                                ? 'Medium'
-                                : 'High'} risk
-                          </div>
-                          <div className="text-[11px] text-ink-3">score out of 100</div>
+                        <div className="text-[11px] text-ink-3">
+                          AI verdict from live chain data
                         </div>
                       </div>
 

@@ -1,17 +1,19 @@
 // Live feed cache + aggregation. Module-level singleton: one server process polls upstreams,
 // every viewer (and the analyze route) reads from here.
 // Module-level cache keeps GeckoTerminal within its ~30 req/min budget regardless of viewers.
-import { Token, TradeEvent, FeedPayload, LLMAnalysis } from '@/lib/types';
+import { Token, TradeEvent, FeedPayload, ageMinutes } from '@/lib/types';
 import { fetchNewPools, fetchDexPools, fetchTokenInfo, GTTokenInfo } from '@/lib/gecko';
 import { fetchDexScreenerTokenInfo, fetchDexScreenerLatestProfiles } from '@/lib/dexscreener';
-import { fetchOnChainMeta } from '@/lib/onchainMeta';
+import { fetchOnChainMeta, OnChainMeta } from '@/lib/onchainMeta';
 import { fetchVirtualsMeta, fetchClankerRecent, LaunchpadMeta } from '@/lib/launchpadMeta';
 import { refreshFlap, FlapSnapshot, knownSymbol } from '@/lib/flap';
 import { readSymbols } from '@/lib/onchain';
+import { fetchHolderStats, HolderStats } from '@/lib/holderStats';
+import { parseX, fetchTweet, classifyX, TweetInfo } from '@/lib/xMeta';
 import { refreshKlik, KlikSnapshot } from '@/lib/klik';
-import { analyzeToken } from '@/lib/llm';
-import { getAnalysis, saveAnalysis } from '@/lib/supabase';
-import { isBlacklistedToken, computeTrustScore, applyActivityBoost } from '@/lib/score';
+import { analyzeToken, PROMPT_VERSION } from '@/lib/llm';
+import { getAnalysis, saveAnalysis, rowToAnalysis, CachedAnalysis } from '@/lib/supabase';
+import { isBlacklistedToken, computeChainScore, computeBoardStats } from '@/lib/score';
 import { getSmartMoneySet } from '@/lib/smartMoney';
 import { proxiedImageUrl, normalizeUpstream } from '@/lib/imageProxy';
 import { getImage, isWarm } from '@/lib/imageCache';
@@ -26,6 +28,8 @@ const ONCHAIN_META_PER_REFRESH = 8; // RPC calls are cheap but we still pace the
 const DRAIN_MIN_INTERVAL = 8_000; // enrichment fires on the heartbeat cadence, not per viewer request
 const IPFS_PER_REFRESH = 24;
 const CHAIN_META_PER_REFRESH = 5; // Blockscout is generous; supply+holders lookups
+const HOLDER_STATS_PER_REFRESH = 6; // concentration lookups — traction tokens only
+const X_PER_REFRESH = 6; // tweet resolutions
 // launch bursts hit ~15 tokens/min on this chain — at 60 a card lived ~4 minutes
 // before being flushed, so a "10 minutes ago" launch was already invisible
 const MAX_TOKENS = 180;
@@ -70,7 +74,12 @@ interface CacheState {
   ipfsQueue: { addr: string; cid: string }[];
   chainMeta: Map<string, { supply?: number; holders?: number } | null>;
   chainMetaQueue: string[];
-  analyses: Map<string, LLMAnalysis | null>; // null = claimed, analysis in flight
+  holderStats: Map<string, HolderStats | null>;
+  holderQueue: string[];
+  xInfo: Map<string, TweetInfo | null>; // keyed by status id
+  xQueue: string[];
+  analyses: Map<string, CachedAnalysis | null>; // null = claimed, analysis in flight
+  reanalyzing: Set<string>; // milestone refresh in flight — old text stays visible
   analyzeInflight: number;
   analyzeCandidates: Token[];
   analyzeFailAt: Map<string, number>;
@@ -85,7 +94,7 @@ interface CacheState {
   dsInfoAt: number;
   dsProfiles: Map<string, GTTokenInfo | null>; // DexScreener latest-profiles cache
   dsProfilesAt: number;
-  onchainMeta: Map<string, { imageUrl?: string; description?: string; twitter?: string; telegram?: string; website?: string } | null>;
+  onchainMeta: Map<string, OnChainMeta | null>;
   onchainMetaQueue: string[];
   // launchpad-native metadata (fastest source): virtuals per-token API + clanker rolling list
   virtualsMeta: Map<string, LaunchpadMeta | null>; // null = asked, not there yet
@@ -116,7 +125,12 @@ const state: CacheState = {
   ipfsQueue: [],
   chainMeta: new Map(),
   chainMetaQueue: [],
+  holderStats: new Map(),
+  holderQueue: [],
+  xInfo: new Map(),
+  xQueue: [],
   analyses: new Map(),
+  reanalyzing: new Set(),
   analyzeInflight: 0,
   analyzeCandidates: [],
   analyzeFailAt: new Map(),
@@ -267,10 +281,17 @@ async function refreshChain() {
   return state.chainInflight;
 }
 
-function attachScore(t: Token) {
-  if (t.score !== undefined) return;
-  t.score = computeTrustScore(t);
-  t.scoreSource = 'heuristic';
+// The score is deterministic and recomputed from the live board every merge, so
+// it always reflects the token's current state. The LLM no longer supplies it.
+function attachScores(tokens: Token[]) {
+  const board = computeBoardStats(tokens);
+  for (const t of tokens) {
+    const { score, parts, flags } = computeChainScore(t, board);
+    t.score = score;
+    t.scoreParts = parts;
+    t.scoreFlags = flags;
+    t.scoreSource = 'chain';
+  }
 }
 
 async function drainInfoQueue() {
@@ -342,6 +363,34 @@ async function drainOnchainMetaQueue() {
         const up = normalizeUpstream(meta.imageUrl);
         if (up) void getImage(up, 256);
       }
+    }),
+  );
+}
+
+// Holder concentration. Budgeted per cycle and only for tokens with traction:
+// a ghost clone with one holder needs no distribution analysis, and the board is
+// mostly ghosts.
+async function drainHolderQueue() {
+  const batch = state.holderQueue.splice(0, HOLDER_STATS_PER_REFRESH);
+  await Promise.all(
+    batch.map(async (addr) => {
+      const t = state.lastTokens.find((x) => x.id === addr);
+      const stats = await fetchHolderStats(addr, t?.poolAddress);
+      if (stats) state.holderStats.set(addr, stats);
+      else state.holderStats.delete(addr); // transient — retry next merge
+    }),
+  );
+}
+
+// Resolve linked tweets. Failures stay `undefined` (unknown), never `dead` —
+// if X blocks us we must not start branding every token a fake social.
+async function drainXQueue() {
+  const batch = state.xQueue.splice(0, X_PER_REFRESH);
+  await Promise.all(
+    batch.map(async (id) => {
+      const info = await fetchTweet(id);
+      if (info) state.xInfo.set(id, info);
+      else state.xInfo.delete(id);
     }),
   );
 }
@@ -423,16 +472,12 @@ async function loadKnownAnalyses(tokens: Token[]) {
     const { getServerSupabase } = await import('@/lib/supabase');
     const db = getServerSupabase();
     if (!db) return;
-    const { data } = await db.from('analyses').select('*').in('address', missing);
-    for (const row of data || []) {
-      state.analyses.set(row.address, {
-        score: row.score,
-        risk: row.risk,
-        pros: row.pros || [],
-        cons: row.cons || [],
-        summary: row.summary || '',
-      });
-    }
+    const { data } = await db
+      .from('analyses')
+      .select('*')
+      .in('address', missing)
+      .eq('prompt_version', PROMPT_VERSION);
+    for (const row of data || []) state.analyses.set(row.address, rowToAnalysis(row));
   } catch {
     /* retry next cycle */
   }
@@ -444,31 +489,99 @@ async function loadKnownAnalyses(tokens: Token[]) {
 // Workers re-pump themselves on completion instead of waiting for the next cycle.
 const ANALYZE_CONCURRENCY = 6;
 const ANALYZE_RETRY_MS = 60_000; // don't hammer the LLM on a failing token
+const MODEL_TAG = 'grok-4.5-low';
+
+// What the token looked like when we last described it. Stored with the analysis
+// so we can tell whether the words are still true.
+function factsSnapshot(t: Token): Record<string, unknown> {
+  return {
+    volume24h: Math.round(t.volume24h ?? 0),
+    holders: t.holders ?? 0,
+    curveProgress: Number((t.curveProgress ?? 0).toFixed(3)),
+    hasSocials: Boolean(t.twitter || t.telegram || t.website),
+    ageMin: ageMinutes(t),
+  };
+}
+
+/**
+ * Milestone re-analysis.
+ *
+ * Analyses used to be written seconds after launch and cached forever, so the
+ * busiest token on the chain ($15k volume, 41 min old) permanently read "only 2
+ * minutes old, zero volume, likely rug", and 35% of tokens with an X account were
+ * described as having none because enrichment hadn't landed yet. Re-describe a
+ * token only when it has materially changed — ghosts never re-run, so the ~15
+ * launches/min of clone spam cost nothing.
+ */
+function isStale(t: Token, cached: CachedAnalysis): boolean {
+  const f = (cached.facts ?? {}) as Record<string, number | boolean | undefined>;
+  const prevVol = Number(f.volume24h ?? 0);
+  const prevHolders = Number(f.holders ?? 0);
+  const prevCurve = Number(f.curveProgress ?? 0);
+  const prevSocials = Boolean(f.hasSocials);
+  const age = ageMinutes(t);
+  const analyzedAgeMin = cached.analyzedAt ? (Date.now() / 1000 - cached.analyzedAt) / 60 : Infinity;
+
+  // socials arrived after we said it had none — the single biggest source of
+  // factually wrong analyses
+  if (!prevSocials && (t.twitter || t.telegram || t.website)) return true;
+  // it actually started trading
+  if ((t.volume24h ?? 0) >= 1_000 && prevVol < 1_000) return true;
+  if ((t.volume24h ?? 0) > prevVol * 5 && (t.volume24h ?? 0) > 200) return true;
+  if ((t.holders ?? 0) >= 25 && prevHolders < 25) return true;
+  if ((t.curveProgress ?? 0) - prevCurve >= 10) return true;
+  // one cheap pass once it's old enough for the data to have arrived, but only
+  // if it's alive — a ghost token at 10 minutes is still a ghost
+  if (age >= 10 && analyzedAgeMin >= 8 && (t.volume24h ?? 0) > 0 && Number(f.ageMin ?? 0) < 5) return true;
+  return false;
+}
 
 function pumpAnalyze() {
   while (state.analyzeInflight < ANALYZE_CONCURRENCY) {
-    const next = state.analyzeCandidates.find(
-      (t) => !state.analyses.has(t.id) && Date.now() - (state.analyzeFailAt.get(t.id) ?? 0) > ANALYZE_RETRY_MS,
-    );
+    const ready = (t: Token) => Date.now() - (state.analyzeFailAt.get(t.id) ?? 0) > ANALYZE_RETRY_MS;
+    // First analyses win: a card must never reach the board unanalyzed. Stale
+    // refreshes fill the spare capacity behind them.
+    let next = state.analyzeCandidates.find((t) => !state.analyses.has(t.id) && ready(t));
+    let refresh = false;
+    if (!next) {
+      next = state.analyzeCandidates.find((t) => {
+        if (state.reanalyzing.has(t.id) || !ready(t)) return false;
+        const a = state.analyses.get(t.id);
+        return Boolean(a) && isStale(t, a as CachedAnalysis);
+      });
+      refresh = Boolean(next);
+    }
     if (!next) return;
-    state.analyses.set(next.id, null); // claim before any await so parallel workers can't collide
+    const token = next;
+    // Claim before any await so parallel workers can't collide. A refresh keeps
+    // the existing text on the card while it re-runs — never blank a live card.
+    if (refresh) state.reanalyzing.add(token.id);
+    else state.analyses.set(token.id, null);
     state.analyzeInflight++;
     void (async () => {
       try {
-        const cached = await getAnalysis(next.id);
-        if (cached) {
-          state.analyses.set(next.id, cached);
-          return;
+        if (!refresh) {
+          const cached = await getAnalysis(token.id, PROMPT_VERSION);
+          if (cached && !isStale(token, cached)) {
+            state.analyses.set(token.id, cached);
+            return;
+          }
         }
-        const analysis = await analyzeToken(next, next.holders);
-        state.analyses.set(next.id, analysis);
-        await saveAnalysis(next.id, analysis, 'grok-4.5-low');
+        const analysis = await analyzeToken(token, token.holders);
+        state.analyses.set(token.id, {
+          ...analysis,
+          analyzedAt: Date.now() / 1000,
+          promptVersion: PROMPT_VERSION,
+          facts: factsSnapshot(token),
+        });
+        await saveAnalysis(token.id, analysis, MODEL_TAG, PROMPT_VERSION, factsSnapshot(token));
       } catch (e) {
-        state.analyses.delete(next.id);
-        state.analyzeFailAt.set(next.id, Date.now());
-        state.analyzeErrors.push(`${next.ticker}: ${e instanceof Error ? e.message : String(e)}`);
+        if (!refresh) state.analyses.delete(token.id);
+        state.analyzeFailAt.set(token.id, Date.now());
+        state.analyzeErrors.push(`${token.ticker}: ${e instanceof Error ? e.message : String(e)}`);
         if (state.analyzeErrors.length > 20) state.analyzeErrors.shift();
       } finally {
+        state.reanalyzing.delete(token.id);
         state.analyzeInflight--;
         pumpAnalyze();
       }
@@ -496,8 +609,12 @@ export function getAnalyzeDebug() {
   };
 }
 
-export function setAnalysisInCache(address: string, analysis: LLMAnalysis) {
-  state.analyses.set(address.toLowerCase(), analysis);
+export function setAnalysisInCache(address: string, analysis: CachedAnalysis) {
+  state.analyses.set(address.toLowerCase(), {
+    ...analysis,
+    analyzedAt: analysis.analyzedAt ?? Date.now() / 1000,
+    promptVersion: analysis.promptVersion ?? PROMPT_VERSION,
+  });
 }
 
 async function refreshDexScreenerProfiles() {
@@ -680,11 +797,8 @@ async function mergeTokens(): Promise<Token[]> {
       t.telegram = t.telegram ?? info.telegram;
       t.website = t.website ?? info.website;
       t.description = t.description ?? info.description;
+      // gtScore is now a component of the chain score, not a competing source
       t.gtScore = info.gtScore;
-      if (info.gtScore !== undefined && t.scoreSource !== 'llm') {
-        t.score = info.gtScore;
-        t.scoreSource = 'gt';
-      }
     } else if (info === undefined && t.source === 'gecko' && !state.infoQueue.includes(t.id)) {
       state.infoQueue.push(t.id);
     } else if (info === null && t.createdAt > nowSec - 6 * 3600) {
@@ -713,18 +827,33 @@ async function mergeTokens(): Promise<Token[]> {
       }
     }
     // real supply + holders from chain; recompute mcap from live price since
-    // GT fdv_usd is unreliable for fresh pools (e.g. stale 10M-supply values)
-    if (t.source === 'gecko') {
-      const cm = state.chainMeta.get(t.id);
-      if (cm) {
-        t.supply = cm.supply;
-        t.holders = t.holders ?? cm.holders;
-      } else if (!state.chainMetaQueue.includes(t.id)) {
-        state.chainMetaQueue.push(t.id);
-      }
-      if (t.priceUsd && t.priceUsd > 0) {
-        t.mcap = t.priceUsd * (t.supply ?? 1_000_000_000);
-      }
+    // GT fdv_usd is unreliable for fresh pools (e.g. stale 10M-supply values).
+    // Only gecko tokens need the supply lookup (flap supply is a fixed 1B) —
+    // holders for everything else come from the holder-stats drain below, which
+    // prioritises tokens with traction instead of burning budget on ghosts.
+    const cm = state.chainMeta.get(t.id);
+    if (cm) {
+      t.supply = t.supply ?? cm.supply;
+      t.holders = t.holders ?? cm.holders;
+    } else if (t.source === 'gecko' && !state.chainMetaQueue.includes(t.id)) {
+      state.chainMetaQueue.push(t.id);
+    }
+    if (t.source === 'gecko' && t.priceUsd && t.priceUsd > 0) {
+      t.mcap = t.priceUsd * (t.supply ?? 1_000_000_000);
+    }
+
+    // Holder concentration — only worth a call once a token has any traction
+    const hs = state.holderStats.get(t.id);
+    if (hs) {
+      t.holders = t.holders ?? hs.holders;
+      t.top1Pct = hs.top1Pct;
+      t.top10Pct = hs.top10Pct;
+    } else if (
+      hs === undefined &&
+      (t.volume24h > 0 || (t.holders ?? 0) > 2) &&
+      !state.holderQueue.includes(t.id)
+    ) {
+      state.holderQueue.push(t.id);
     }
 
     // DexScreener latest profiles (rolling window of recently updated art)
@@ -747,6 +876,7 @@ async function mergeTokens(): Promise<Token[]> {
       t.telegram = t.telegram ?? onchain.telegram;
       t.website = t.website ?? onchain.website;
       t.description = t.description ?? onchain.description;
+      t.deployer = t.deployer ?? onchain.deployer;
     } else if (!t.imageUrl && !state.onchainMetaQueue.includes(t.id)) {
       state.onchainMetaQueue.push(t.id);
     }
@@ -761,18 +891,52 @@ async function mergeTokens(): Promise<Token[]> {
     t.imageUrl = proxiedImageUrl(originalImageUrl, 256);
     t.bannerUrl = proxiedImageUrl(t.bannerUrl || originalImageUrl, 640);
 
-    // fallback heuristic score when no GT score or LLM analysis exists
-    attachScore(t);
-
-    // attach AI analysis
+    // attach the AI narrative — it explains the score, it no longer sets it
     const a = state.analyses.get(t.id);
-    if (a) {
-      t.analysis = a;
-      t.score = a.score;
-      t.scoreSource = 'llm';
-    }
+    if (a) t.analysis = a;
   }
+
+  attachXSignals(tokens); // must see the whole board to spot reused handles
+  attachScores(tokens); // needs the whole board for percentile calibration
   return tokens;
+}
+
+/**
+ * Borrowed-fame detection, free and API-less.
+ *
+ * 84 of 110 X links on this board point at someone else's tweet, and the same
+ * handles recur across unrelated tokens (googlejapan x7, elonmusk x5, AP). A
+ * handle cited by several different tokens provably belongs to none of them —
+ * which is exactly why follower count would be the wrong signal to buy.
+ */
+function attachXSignals(tokens: Token[]) {
+  const parsed = new Map<string, ReturnType<typeof parseX>>();
+  const uses = new Map<string, Set<string>>();
+
+  for (const t of tokens) {
+    if (!t.twitter) continue;
+    const p = parseX(t.twitter);
+    if (!p?.handle) continue;
+    parsed.set(t.id, p);
+    const set = uses.get(p.handle) ?? new Set<string>();
+    set.add(t.id);
+    uses.set(p.handle, set);
+  }
+
+  for (const t of tokens) {
+    const p = parsed.get(t.id);
+    if (!p) continue;
+    let tweet: TweetInfo | null = null;
+    if (p.statusId) {
+      const cached = state.xInfo.get(p.statusId);
+      if (cached === undefined) {
+        if (!state.xQueue.includes(p.statusId)) state.xQueue.push(p.statusId);
+      } else {
+        tweet = cached;
+      }
+    }
+    t.xSignal = classifyX(p, tweet, t.ticker, t.name, uses.get(p.handle!)?.size ?? 1);
+  }
 }
 
 // Whale trades often land on tokens that launched before our scan window, so the
@@ -823,6 +987,8 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
       drainIpfsQueue(),
       drainOnchainMetaQueue(),
       drainChainMetaQueue(),
+      drainHolderQueue(),
+      drainXQueue(),
       drainVirtualsQueue(),
       refreshClankerMap(),
     ]);
@@ -902,8 +1068,10 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   const whales = [...state.whaleEvents.values()].sort((a, b) => b.ts - a.ts).slice(0, 50);
   await resolveWhaleTickers(whales, tokens);
 
-  const nowSec = Date.now() / 1000;
-  for (const t of tokens) applyActivityBoost(t, activity, nowSec);
+  // applyActivityBoost used to add up to +25 here, in place, without touching
+  // scoreSource — so a card labelled "AI score" showed a number the AI never
+  // produced, driven by a 30-trade window it called 24h. Buy pressure is a
+  // real component of computeChainScore now.
 
   const launches1h =
     state.flap.tokens.filter((t) => t.createdAt >= hourAgo).length +

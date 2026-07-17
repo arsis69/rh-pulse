@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { LLMAnalysis } from '@/lib/types';
 import { getCachedToken, setAnalysisInCache } from '@/lib/feedCache';
-import { analyzeToken } from '@/lib/llm';
+import { analyzeToken, PROMPT_VERSION } from '@/lib/llm';
 import { getAnalysis, saveAnalysis } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid address' }, { status: 400 });
   }
 
-  const cached = await getAnalysis(address);
+  const cached = await getAnalysis(address, PROMPT_VERSION);
   if (cached) return NextResponse.json({ analysis: cached, cached: true });
 
   const existing = inflight.get(address);
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
     const holders = token.holders ?? (await fetchHolders(address));
     const analysis = await analyzeToken(token, holders);
     setAnalysisInCache(address, analysis);
-    await saveAnalysis(address, analysis, 'grok-4.5-low');
+    await saveAnalysis(address, analysis, 'grok-4.5-low', PROMPT_VERSION);
     return analysis;
   })();
   inflight.set(address, job);

@@ -93,6 +93,8 @@ async function fetchPoolsFrom(url: string): Promise<Token[]> {
       priceChange24h: num(a.price_change_percentage?.h24),
       priceChange1h: num(a.price_change_percentage?.h1),
       txns24h: a.transactions?.h24 ? a.transactions.h24.buys + a.transactions.h24.sells : undefined,
+      buys24h: a.transactions?.h24?.buys,
+      sells24h: a.transactions?.h24?.sells,
       sparkline: synthSparkline(a.price_change_percentage),
       imageUrl: base.attributes.image_url || undefined,
       hasX: false,

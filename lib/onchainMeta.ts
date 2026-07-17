@@ -26,6 +26,7 @@ export interface OnChainMeta {
   twitter?: string;
   telegram?: string;
   website?: string;
+  deployer?: string; // already decoded by getTokenInfo — was being discarded
 }
 
 export async function fetchOnChainMeta(address: string): Promise<OnChainMeta | null> {
@@ -46,6 +47,7 @@ export async function fetchOnChainMeta(address: string): Promise<OnChainMeta | n
         twitter: normalizeUrl(socials.twitter),
         telegram: normalizeUrl(socials.telegram),
         website: normalizeUrl(socials.website),
+        deployer: deployer && /[1-9a-f]/i.test(deployer.slice(2)) ? deployer.toLowerCase() : undefined,
       };
     }
   } catch {

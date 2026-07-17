@@ -48,9 +48,10 @@ export const usePulseStore = create<PulseState>((set, get) => ({
     // apply any flip-fetched ones the server hasn't reflected yet
     const merged = new Map(analyses);
     for (const t of payload.tokens) if (t.analysis) merged.set(t.id, t.analysis);
+    // the analysis is narrative only — the score stays the server's chain score
     const tokens = payload.tokens.map((t) => {
       const a = merged.get(t.id);
-      return a ? { ...t, analysis: a, score: a.score, scoreSource: 'llm' as const } : t;
+      return a ? { ...t, analysis: a } : t;
     });
     set({
       tokens,
@@ -76,7 +77,7 @@ export const usePulseStore = create<PulseState>((set, get) => ({
       analyses,
       analysisPending: pending,
       tokens: get().tokens.map((t) =>
-        t.id === address.toLowerCase() ? { ...t, score: analysis.score, scoreSource: 'llm' } : t,
+        t.id === address.toLowerCase() ? { ...t, analysis } : t,
       ),
     });
   },

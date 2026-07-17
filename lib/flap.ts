@@ -30,6 +30,7 @@ interface RawLog {
 
 interface CurveState {
   createdTs: number;
+  creator?: string;
   name: string;
   symbol: string;
   metaCid: string;
@@ -37,7 +38,7 @@ interface CurveState {
   lastPriceWei: bigint;
   firstPriceWei: bigint; // first observed trade price → "up since launch"
   volDayEth: number; // rolling, pruned by trade timestamps below
-  trades: { ts: number; eth: number; priceWei: bigint }[];
+  trades: { ts: number; eth: number; priceWei: bigint; side: 'buy' | 'sell' }[];
   netCurveEth: number;
 }
 
@@ -51,6 +52,32 @@ const SYMBOL_MAX = 20_000;
 
 export function knownSymbol(address: string): string | undefined {
   return symbols.get(address.toLowerCase());
+}
+
+// Deployer history: `creator` rides on every TokenCreated log and used to be
+// dropped on the floor. Kept outside `curve` (which prunes to 24h) so a serial
+// launcher's record survives its dead tokens.
+const deployers = new Map<string, { tokens: Set<string>; firstSeen: number }>();
+const DEPLOYER_MAX = 5_000;
+
+function rememberLaunch(creator: string | undefined, token: string, ts: number) {
+  if (!creator) return;
+  const key = creator.toLowerCase();
+  const rec = deployers.get(key) ?? { tokens: new Set<string>(), firstSeen: ts };
+  rec.tokens.add(token);
+  deployers.set(key, rec);
+  while (deployers.size > DEPLOYER_MAX) deployers.delete(deployers.keys().next().value!);
+}
+
+export interface DeployerStats {
+  launches: number; // total launches we've indexed from this address
+  firstSeen: number;
+}
+
+export function deployerStats(creator?: string): DeployerStats | undefined {
+  if (!creator) return undefined;
+  const rec = deployers.get(creator.toLowerCase());
+  return rec ? { launches: rec.tokens.size, firstSeen: rec.firstSeen } : undefined;
 }
 let cursor = 0; // last scanned block
 
@@ -118,7 +145,7 @@ function applyTrade(log: RawLog, side: 'buy' | 'sell', ethUsd: number) {
         st.lastTs = ts;
         st.lastPriceWei = args.postPrice;
       }
-      st.trades.push({ ts, eth, priceWei: args.postPrice });
+      st.trades.push({ ts, eth, priceWei: args.postPrice, side });
       st.netCurveEth += side === 'buy' ? eth : -eth;
     }
     activity.push({
@@ -176,6 +203,9 @@ async function applyCurveStates(tokens: Token[], ethUsd: number) {
     if (!s) continue;
     t.liquidity = s.reserveEth * ethUsd;
     t.curveProgress = s.progressPct;
+    t.buyTax = s.buyTaxPct;
+    t.sellTax = s.sellTaxPct;
+    t.poolAddress = t.poolAddress ?? s.poolAddress;
     if (s.graduated) t.isCurve = false;
     if (s.priceWei > 0n) {
       const priceEth = Number(s.priceWei) / 1e18;
@@ -205,11 +235,14 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
     for (const log of created) {
       try {
         const { args } = decode(log) as unknown as {
-          args: { ts: bigint; token: string; name: string; symbol: string; meta: string };
+          args: { ts: bigint; creator: string; token: string; name: string; symbol: string; meta: string };
         };
-        symbols.set(args.token.toLowerCase(), args.symbol);
-        curve.set(args.token.toLowerCase(), {
+        const addr = args.token.toLowerCase();
+        symbols.set(addr, args.symbol);
+        rememberLaunch(args.creator, addr, Number(args.ts));
+        curve.set(addr, {
           createdTs: Number(args.ts),
+          creator: args.creator?.toLowerCase(),
           name: args.name,
           symbol: args.symbol,
           metaCid: args.meta,
@@ -265,6 +298,10 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
       volume1h: st.trades.filter((t) => t.ts >= hourAgo).reduce((s, t) => s + t.eth, 0) * ethUsd,
       priceChange1h: pctChangeSince(st.trades, hourAgo),
       sparkline: buildSparkline(st.trades),
+      deployer: st.creator,
+      deployerLaunches: deployerStats(st.creator)?.launches,
+      buys24h: st.trades.filter((t) => t.side === 'buy').length,
+      sells24h: st.trades.filter((t) => t.side === 'sell').length,
       hasX: false,
       isCurve: true,
       scoreSource: null,

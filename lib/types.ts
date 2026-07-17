@@ -9,8 +9,29 @@ export type Launchpad =
   | 'klik'
   | 'other';
 
+// What we can learn about a token's X link for free. Follower counts are NOT
+// available without the paid API — and would be a trap anyway: most tokens link
+// a famous account's meme tweet (googlejapan, elonmusk, AP) rather than their own.
+export interface XSignal {
+  handle?: string;
+  own: boolean; // the link plausibly belongs to this project
+  borrowed: boolean; // links someone else's tweet — several tokens cite the same handle
+  dead: boolean; // link doesn't resolve — a fake social
+  blueVerified?: boolean;
+  likes?: number;
+  tweetAgeSec?: number;
+}
+
+// Per-component contributions so the drawer can explain the number.
+export interface ScoreBreakdown {
+  label: string;
+  value: number; // 0-100 contribution after weighting
+  weight: number;
+  detail: string;
+}
+
+// Narrative only — the score is deterministic and computed from chain data.
 export interface LLMAnalysis {
-  score: number;
   risk: 'Low' | 'Medium' | 'High';
   pros: string[];
   cons: string[];
@@ -35,7 +56,16 @@ export interface Token {
   priceChange24h?: number; // percent; curve tokens: change since first trade
   priceChange1h?: number; // percent over the last hour
   txns24h?: number;
+  buys24h?: number; // kept split from sells — sell-heavy tape is a dump signal
+  sells24h?: number;
   holders?: number;
+  top1Pct?: number; // largest holder's share of supply, pool/burn excluded
+  top10Pct?: number;
+  deployer?: string; // creator address from the launch event
+  deployerLaunches?: number; // how many tokens this address has launched
+  buyTax?: number; // percent; creator-set, currently NOT enforced on curve trades
+  sellTax?: number;
+  xSignal?: XSignal;
   supply?: number; // whole tokens, from chain
   sparkline?: number[]; // relative price points, oldest → newest
   imageUrl?: string;
@@ -45,8 +75,10 @@ export interface Token {
   website?: string;
   description?: string;
   gtScore?: number; // GeckoTerminal trust score 0-100
-  score?: number; // 0-100, only from a real source
-  scoreSource?: 'gt' | 'llm' | 'heuristic' | null;
+  score?: number; // 0-100, deterministic from live chain signals
+  scoreSource?: 'chain' | 'gt' | null;
+  scoreParts?: ScoreBreakdown[]; // why the score is what it is
+  scoreFlags?: string[]; // hard warnings: dead social, extreme concentration…
   hasX: boolean;
   isCurve?: boolean; // still on bonding curve (pre-DEX)
   curveProgress?: number; // 0-100 toward DEX graduation, read from the Portal

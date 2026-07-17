@@ -23,7 +23,16 @@ export interface CurveState {
   progressPct: number; // 0-100, straight from the contract
   graduated: boolean; // curve closed, now trading on a DEX pool
   priceWei: bigint;
+  // Creator tax, basis points → percent. Verified NOT enforced on curve trades:
+  // every TokenBought pays exactly the 1% platform fee (getFeeRate() == 100 bps)
+  // whether this field says 0 or 1000. Informational only — do not penalise a
+  // fee nobody actually pays; it may only bite after graduation.
+  buyTaxPct: number;
+  sellTaxPct: number;
+  poolAddress?: string; // excluded from holder concentration — the LP is not a whale
 }
+
+const BPS_SCALE = 100; // basis points → percent
 
 // The Portal reports `progress` as a 1e18-scaled fraction of the graduation
 // target (verified: reserve 0.0097 ETH → progress 1.94e15, i.e. 5 ETH target).
@@ -61,12 +70,18 @@ export async function readCurveStates(addresses: string[]): Promise<Map<string, 
         price: bigint;
         pool: string;
         progress: bigint;
+        buyTaxRate: bigint;
+        sellTaxRate: bigint;
       };
+      const hasPool = /[1-9a-f]/i.test(s.pool.slice(2));
       map.set(addresses[i].toLowerCase(), {
         reserveEth: Number(s.reserve) / 1e18,
         progressPct: Math.min(100, Math.max(0, Number(s.progress) / PROGRESS_SCALE)),
-        graduated: s.status !== 1 || /[1-9a-f]/i.test(s.pool.slice(2)),
+        graduated: s.status !== 1 || hasPool,
         priceWei: s.price,
+        buyTaxPct: Number(s.buyTaxRate) / BPS_SCALE,
+        sellTaxPct: Number(s.sellTaxRate) / BPS_SCALE,
+        poolAddress: hasPool ? s.pool : undefined,
       });
     });
   } catch {

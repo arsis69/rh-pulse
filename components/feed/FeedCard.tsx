@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Token } from '@/lib/types';
 import { usePulseStore, isNewToken } from '@/lib/store';
 import { launchpadColors } from '@/lib/chain';
+import { scoreColor } from '@/lib/score';
 import { fmtUsd, fmtAge, fmtPct, shortAddr } from '@/lib/format';
 import { gmgnUrl } from '@/lib/geckoShared';
 import { Sparkline } from '@/components/card/Sparkline';
@@ -19,10 +20,15 @@ interface FeedCardProps {
 
 function scoreAccent(score?: number) {
   if (score === undefined) return { color: 'var(--color-edge-bright)', glow: 'transparent' };
-  if (score >= 80) return { color: 'var(--color-up)', glow: 'rgba(34,197,94,0.18)' };
-  if (score >= 60) return { color: 'var(--color-legendary)', glow: 'rgba(245,158,11,0.15)' };
-  if (score >= 40) return { color: 'var(--color-pulse)', glow: 'rgba(45,212,191,0.12)' };
-  return { color: 'var(--color-down)', glow: 'rgba(239,68,68,0.12)' };
+  const glow =
+    score >= 80
+      ? 'rgba(34,197,94,0.18)'
+      : score >= 60
+        ? 'rgba(245,158,11,0.15)'
+        : score >= 40
+          ? 'rgba(45,212,191,0.12)'
+          : 'rgba(239,68,68,0.12)';
+  return { color: scoreColor(score), glow };
 }
 
 function CopyCA({ address, onClick }: { address: string; onClick?: (e: React.MouseEvent) => void }) {
@@ -80,6 +86,17 @@ export function FeedCard({ token, now, onSelect, priority }: FeedCardProps) {
         >
           {token.launchpad}
         </span>
+
+        {/* hard warnings belong on the card, not buried in the drawer */}
+        {token.scoreFlags && token.scoreFlags.length > 0 && (
+          <span
+            className="absolute right-2.5 top-2.5 rounded-md px-1.5 py-0.5 text-[10px] font-bold text-down"
+            style={{ background: 'rgba(8,9,11,0.85)' }}
+            title={token.scoreFlags.join(' · ')}
+          >
+            ⚠ {token.scoreFlags.length}
+          </span>
+        )}
       </div>
 
       {/* identity */}
@@ -100,18 +117,12 @@ export function FeedCard({ token, now, onSelect, priority }: FeedCardProps) {
         {token.score !== undefined && token.scoreSource != null && (
           <span
             className="num shrink-0 rounded-md px-1.5 py-0.5 text-[12px] font-bold"
-            title={token.scoreSource === 'llm' ? 'AI score' : 'Trust score'}
-            style={{
-              color:
-                token.score >= 80
-                  ? 'var(--color-up)'
-                  : token.score >= 60
-                    ? 'var(--color-legendary)'
-                    : token.score >= 40
-                      ? 'var(--color-pulse)'
-                      : 'var(--color-down)',
-              background: 'var(--color-surface-2)',
-            }}
+            title={
+              token.scoreParts?.length
+                ? `Trust score ${token.score}/100 — ${token.scoreParts.map((p) => `${p.label} ${p.value}/${p.weight}`).join(', ')}`
+                : `Trust score ${token.score}/100`
+            }
+            style={{ color: scoreColor(token.score), background: 'var(--color-surface-2)' }}
           >
             {token.score}
           </span>
