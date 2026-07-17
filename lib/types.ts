@@ -83,6 +83,7 @@ export interface Token {
   scoreSource?: 'chain' | 'gt' | null;
   scoreParts?: ScoreBreakdown[]; // why the score is what it is
   scoreFlags?: string[]; // hard warnings: dead social, extreme concentration…
+  scoreConfidence?: number; // 0-1: fraction of signals actually measured
   hasX: boolean;
   isCurve?: boolean; // still on bonding curve (pre-DEX)
   curveProgress?: number; // 0-100 toward DEX graduation, read from the Portal

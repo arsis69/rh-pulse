@@ -114,7 +114,11 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="text-[12px] font-semibold uppercase tracking-wider text-ink-2">Trust score</div>
-                        <div className="mt-1 text-[13px] text-ink-2">Live chain signals · ranked vs the board</div>
+                        <div className="mt-1 text-[13px] text-ink-2">
+                          {token.scoreConfidence !== undefined && token.scoreConfidence < 0.9
+                            ? `Partial — measured on ${Math.round(token.scoreConfidence * 100)}% of signals`
+                            : 'Live chain signals · ranked vs the board'}
+                        </div>
                       </div>
                       <div
                         className="num flex h-12 w-12 items-center justify-center rounded-xl text-[20px] font-bold"

@@ -308,10 +308,11 @@ async function refreshChain() {
 function attachScores(tokens: Token[]) {
   const board = computeBoardStats(tokens);
   for (const t of tokens) {
-    const { score, parts, flags } = computeChainScore(t, board);
+    const { score, parts, flags, confidence } = computeChainScore(t, board);
     t.score = score;
     t.scoreParts = parts;
     t.scoreFlags = flags;
+    t.scoreConfidence = confidence;
     t.scoreSource = 'chain';
   }
 }

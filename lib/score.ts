@@ -135,6 +135,7 @@ export interface ChainScore {
   score: number;
   parts: ScoreBreakdown[];
   flags: string[];
+  confidence: number; // 0-1: fraction of the 100-pt signal we could measure
 }
 
 /**
@@ -275,10 +276,20 @@ export function computeChainScore(token: Token, board: BoardStats): ChainScore {
   const earned = parts.reduce((s, p) => s + p.value, 0);
   let score = known > 0 ? (earned / known) * 100 : 0;
 
-  // Confidence cap: normalising cuts both ways — a token we know ONE thing about
-  // could otherwise ace that one thing and score 100. Certainty has to be earned,
-  // so the ceiling rises with how much of the token we could actually measure.
-  score = Math.min(score, 50 + known / 2);
+  // Confidence: how much of the 100-point signal we could actually read. Missing
+  // components (socials not fetched yet, no deployer history for non-flap tokens —
+  // ~2/3 of the board) are excluded from the average, not zeroed. But a "trust"
+  // score has to earn its certainty: acing the 75% we can see is not the same as
+  // being verified on everything.
+  //
+  // So pull an above-average score toward the neutral midpoint in proportion to
+  // what we DON'T know. This only ever lowers a high score — ghosts and the
+  // absolute floors below are untouched — and is always tighter than the old
+  // `50 + known/2` ceiling. A fully-measured token is unaffected; a token graded
+  // on 75/100 signals has a quarter of its distance-above-neutral shaved off.
+  const NEUTRAL = 50;
+  const confidence = known / 100; // 100 = full weight before the GT bonus
+  if (score > NEUTRAL) score = NEUTRAL + confidence * (score - NEUTRAL);
 
   // ---- GT trust score folded in as a nudge when present, not as an override
   if (token.gtScore !== undefined) {
@@ -312,5 +323,5 @@ export function computeChainScore(token: Token, board: BoardStats): ChainScore {
   if (holders !== undefined && holders <= 1 && v24 <= 0) score = Math.min(score, 12);
   if (ageMinutes(token) < 2 && v24 <= 0) score = Math.min(score, 15);
 
-  return { score: Math.round(Math.min(100, Math.max(0, score))), parts, flags };
+  return { score: Math.round(Math.min(100, Math.max(0, score))), parts, flags, confidence };
 }
