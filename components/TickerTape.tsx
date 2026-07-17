@@ -52,7 +52,7 @@ function TapeItemRow({ item, onClick }: { item: TapeItem; onClick?: (token: Toke
     return (
       <span
         onClick={() => onClick?.(token)}
-        title={`${token.ticker} traded ${fmtUsd(item.volume)} in the last hour — the most on the chain`}
+        title={`${token.ticker} traded ${fmtUsd(item.volume)} in the last hour, the most on the chain`}
         className={`${CHIP} ${clickable}`}
       >
         <Flame className="h-3.5 w-3.5 text-pulse" />

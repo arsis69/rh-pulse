@@ -23,7 +23,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Pulse — live token radar for Robinhood Chain",
     description: "Every new token on Robinhood Chain, live, with real market data and AI analysis.",
-    images: ["/logo.jpg"],
+    images: ["/logo.png"],
   },
 };
 

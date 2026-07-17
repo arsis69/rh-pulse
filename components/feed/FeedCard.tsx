@@ -110,7 +110,7 @@ export function FeedCard({ token, now, onSelect, priority }: FeedCardProps) {
             className="num shrink-0 rounded-md px-1.5 py-0.5 text-[12px] font-bold"
             title={
               token.scoreParts?.length
-                ? `Trust score ${token.score}/100 — ${token.scoreParts.map((p) => `${p.label} ${p.value}/${p.weight}`).join(', ')}`
+                ? `Trust score ${token.score}/100 · ${token.scoreParts.map((p) => `${p.label} ${p.value}/${p.weight}`).join(', ')}`
                 : `Trust score ${token.score}/100`
             }
             style={{ color: scoreColor(token.score), background: 'var(--color-surface-2)' }}
