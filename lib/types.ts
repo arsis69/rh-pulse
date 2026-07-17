@@ -47,6 +47,7 @@ export interface Token {
   scoreSource?: 'gt' | 'llm' | 'heuristic' | null;
   hasX: boolean;
   isCurve?: boolean; // still on bonding curve (pre-DEX)
+  curveProgress?: number; // 0-100 toward DEX graduation, read from the Portal
   metaCid?: string; // IPFS metadata CID (flap launches)
   analysis?: LLMAnalysis; // attached server-side once analyzed
 }

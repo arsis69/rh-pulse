@@ -6,7 +6,8 @@ import { fetchNewPools, fetchDexPools, fetchTokenInfo, GTTokenInfo } from '@/lib
 import { fetchDexScreenerTokenInfo, fetchDexScreenerLatestProfiles } from '@/lib/dexscreener';
 import { fetchOnChainMeta } from '@/lib/onchainMeta';
 import { fetchVirtualsMeta, fetchClankerRecent, LaunchpadMeta } from '@/lib/launchpadMeta';
-import { refreshFlap, FlapSnapshot } from '@/lib/flap';
+import { refreshFlap, FlapSnapshot, knownSymbol } from '@/lib/flap';
+import { readSymbols } from '@/lib/onchain';
 import { refreshKlik, KlikSnapshot } from '@/lib/klik';
 import { analyzeToken } from '@/lib/llm';
 import { getAnalysis, saveAnalysis } from '@/lib/supabase';
@@ -77,6 +78,7 @@ interface CacheState {
   // whale/smart-money events retained separately — the rolling trade tape churns
   // in seconds on this chain, so rare big buys must not be flushed with it
   whaleEvents: Map<string, TradeEvent>;
+  symbolCache: Map<string, string>; // address → ticker, for trades on tokens outside the feed
   prewarmQueue: string[]; // upstream image refs to pull into the cache before viewers ask
   lastTokens: Token[]; // ungated merged view (pre analysis-gate), for /api/analyze lookups
   dsInfo: Map<string, GTTokenInfo | null>; // DexScreener image/social enrichment
@@ -120,6 +122,7 @@ const state: CacheState = {
   analyzeFailAt: new Map(),
   analyzeErrors: [],
   whaleEvents: new Map(),
+  symbolCache: new Map(),
   prewarmQueue: [],
   lastTokens: [],
   dsInfo: new Map(),
@@ -772,6 +775,34 @@ async function mergeTokens(): Promise<Token[]> {
   return tokens;
 }
 
+// Whale trades often land on tokens that launched before our scan window, so the
+// indexer never saw their TokenCreated log and the row read "$???". Resolve the
+// ticker from the feed, then from the token contract itself, and remember it.
+async function resolveWhaleTickers(whales: TradeEvent[], tokens: Token[]) {
+  const missing = new Set<string>();
+  for (const w of whales) {
+    if (w.ticker) continue;
+    const addr = w.token.toLowerCase();
+    const known =
+      state.symbolCache.get(addr) ??
+      knownSymbol(addr) ??
+      tokens.find((t) => t.id === addr)?.ticker ??
+      state.seenGecko.get(addr)?.ticker;
+    if (known) {
+      state.symbolCache.set(addr, known);
+      w.ticker = known;
+    } else {
+      missing.add(addr);
+    }
+  }
+  if (!missing.size) return;
+  const resolved = await readSymbols([...missing]);
+  for (const [addr, sym] of resolved) state.symbolCache.set(addr, sym);
+  for (const w of whales) {
+    if (!w.ticker) w.ticker = state.symbolCache.get(w.token.toLowerCase());
+  }
+}
+
 export async function buildFeedPayload(): Promise<FeedPayload> {
   if (!seenLoaded) {
     seenLoaded = true;
@@ -869,6 +900,7 @@ export async function buildFeedPayload(): Promise<FeedPayload> {
   }
   for (const [k, t] of state.whaleEvents) if (t.ts < dayAgoSec) state.whaleEvents.delete(k);
   const whales = [...state.whaleEvents.values()].sort((a, b) => b.ts - a.ts).slice(0, 50);
+  await resolveWhaleTickers(whales, tokens);
 
   const nowSec = Date.now() / 1000;
   for (const t of tokens) applyActivityBoost(t, activity, nowSec);

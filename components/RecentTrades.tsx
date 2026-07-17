@@ -1,7 +1,7 @@
 'use client';
 
 import { usePulseStore } from '@/lib/store';
-import { fmtUsd, fmtEth, fmtAge } from '@/lib/format';
+import { fmtUsd, fmtEth, fmtAge, shortAddr } from '@/lib/format';
 import { Token } from '@/lib/types';
 
 interface RecentTradesProps {
@@ -49,7 +49,8 @@ export function RecentTrades({ now, className, onSelectToken }: RecentTradesProp
       <div className="border-b border-edge px-4 py-3">
         <div className="text-[12px] font-semibold uppercase tracking-wider text-ink-3">Smart money & whales</div>
       </div>
-      <div className="no-scrollbar max-h-[calc(100vh-220px)] overflow-y-auto p-2">
+      {/* short on mobile so it never buries the feed; full column height on desktop */}
+      <div className="no-scrollbar max-h-[320px] overflow-y-auto p-2 lg:max-h-[calc(100vh-220px)]">
         {whales.map((trade, i) => {
           const isTopHolder = trade.whale?.type === 'top_holder';
           const isWhale =
@@ -84,7 +85,11 @@ export function RecentTrades({ now, className, onSelectToken }: RecentTradesProp
               </span>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px] font-semibold text-ink">
-                  {label} <span className="text-ink-2">${trade.ticker || '???'}</span>
+                  {label}{' '}
+                  <span className="text-ink-2">
+                    {/* server resolves tickers on-chain; show the address, never "???" */}
+                    {trade.ticker ? `$${trade.ticker}` : shortAddr(trade.token)}
+                  </span>
                 </div>
                 {showContext && (
                   <div className={`text-[11px] ${isBuy ? 'text-up' : 'text-down'}`}>{trade.whale!.context}</div>

@@ -3,6 +3,7 @@
 import { decodeEventLog, parseAbi } from 'viem';
 import { Token, TradeEvent } from '@/lib/types';
 import { flapPortalAddress } from '@/lib/chain';
+import { readCurveStates } from '@/lib/onchain';
 
 const RPC_URL = 'https://rpc.mainnet.chain.robinhood.com';
 const EXPLORER_API = 'https://robinhoodchain.blockscout.com/api';
@@ -36,13 +37,21 @@ interface CurveState {
   lastPriceWei: bigint;
   firstPriceWei: bigint; // first observed trade price → "up since launch"
   volDayEth: number; // rolling, pruned by trade timestamps below
-  trades: { ts: number; eth: number }[];
+  trades: { ts: number; eth: number; priceWei: bigint }[];
   netCurveEth: number;
 }
 
 // module-level indexer state (single Node process behind systemd)
 const curve = new Map<string, CurveState>();
 const activity: TradeEvent[] = [];
+// Symbols outlive curve state: `curve` is pruned to the last 24h of launches,
+// but trades on older tokens still need a ticker for the whale feed.
+const symbols = new Map<string, string>();
+const SYMBOL_MAX = 20_000;
+
+export function knownSymbol(address: string): string | undefined {
+  return symbols.get(address.toLowerCase());
+}
 let cursor = 0; // last scanned block
 
 async function rpcBlockNumber(): Promise<number> {
@@ -109,14 +118,14 @@ function applyTrade(log: RawLog, side: 'buy' | 'sell', ethUsd: number) {
         st.lastTs = ts;
         st.lastPriceWei = args.postPrice;
       }
-      st.trades.push({ ts, eth });
+      st.trades.push({ ts, eth, priceWei: args.postPrice });
       st.netCurveEth += side === 'buy' ? eth : -eth;
     }
     activity.push({
       ts,
       token: args.token,
       address: (side === 'buy' ? args.buyer : args.seller)?.toLowerCase(),
-      ticker: st?.symbol,
+      ticker: st?.symbol ?? symbols.get(key),
       side,
       eth,
       usd: eth * ethUsd,
@@ -125,6 +134,39 @@ function applyTrade(log: RawLog, side: 'buy' | 'sell', ethUsd: number) {
     });
   } catch {
     /* skip undecodable log */
+  }
+}
+
+// Real price path from the curve's own trade prints — evenly sampled so the
+// line isn't dominated by whichever second had the most trades.
+function buildSparkline(trades: { ts: number; priceWei: bigint }[]): number[] | undefined {
+  if (trades.length < 2) return undefined;
+  const sorted = [...trades].sort((a, b) => a.ts - b.ts).filter((t) => t.priceWei > 0n);
+  if (sorted.length < 2) return undefined;
+  const POINTS = 12;
+  const out: number[] = [];
+  for (let i = 0; i < POINTS; i++) {
+    const idx = Math.round((i / (POINTS - 1)) * (sorted.length - 1));
+    out.push(Number(sorted[idx].priceWei) / 1e18);
+  }
+  return out;
+}
+
+// Overwrite event-derived guesses with the Portal's own numbers: `reserve` is
+// the ETH really in the curve and `progress` is the real graduation percent.
+async function applyCurveStates(tokens: Token[], ethUsd: number) {
+  const states = await readCurveStates(tokens.map((t) => t.address));
+  for (const t of tokens) {
+    const s = states.get(t.id);
+    if (!s) continue;
+    t.liquidity = s.reserveEth * ethUsd;
+    t.curveProgress = s.progressPct;
+    if (s.graduated) t.isCurve = false;
+    if (s.priceWei > 0n) {
+      const priceEth = Number(s.priceWei) / 1e18;
+      t.priceUsd = priceEth * ethUsd || undefined;
+      t.mcap = priceEth * TOKEN_SUPPLY * ethUsd;
+    }
   }
 }
 
@@ -150,6 +192,7 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
         const { args } = decode(log) as unknown as {
           args: { ts: bigint; token: string; name: string; symbol: string; meta: string };
         };
+        symbols.set(args.token.toLowerCase(), args.symbol);
         curve.set(args.token.toLowerCase(), {
           createdTs: Number(args.ts),
           name: args.name,
@@ -179,6 +222,7 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
     if (st.createdTs < dayAgo) curve.delete(key);
     else st.trades = st.trades.filter((t) => t.ts >= dayAgo);
   }
+  while (symbols.size > SYMBOL_MAX) symbols.delete(symbols.keys().next().value!);
   while (activity.length > MAX_ACTIVITY) activity.shift();
 
   const tokens: Token[] = [];
@@ -202,6 +246,7 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
           ? (Number(st.lastPriceWei) / Number(st.firstPriceWei) - 1) * 100
           : undefined,
       txns24h: st.trades.length,
+      sparkline: buildSparkline(st.trades),
       hasX: false,
       isCurve: true,
       scoreSource: null,
@@ -209,9 +254,11 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
     });
   }
   tokens.sort((a, b) => b.createdAt - a.createdAt);
+  const top = tokens.slice(0, MAX_TOKENS);
+  await applyCurveStates(top, ethUsd);
 
   return {
-    tokens: tokens.slice(0, MAX_TOKENS),
+    tokens: top,
     activity: [...activity].sort((a, b) => b.ts - a.ts),
     launches24h: curve.size,
   };

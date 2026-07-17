@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Token } from '@/lib/types';
 import { usePulseStore, isNewToken } from '@/lib/store';
 import { launchpadColors } from '@/lib/chain';
-import { fmtUsd, fmtAge, shortAddr, curvePct } from '@/lib/format';
+import { fmtUsd, fmtAge, fmtPct, shortAddr } from '@/lib/format';
 import { gmgnUrl } from '@/lib/geckoShared';
 import { Sparkline } from '@/components/card/Sparkline';
 import { TokenImage } from '@/components/ui/TokenImage';
@@ -50,7 +50,11 @@ export function FeedCard({ token, now, onSelect, priority }: FeedCardProps) {
   const lpColor = launchpadColors[token.launchpad] || launchpadColors.other;
   const firstSeenAt = usePulseStore((s) => s.firstSeenAt);
   const isNew = isNewToken(token.id, firstSeenAt, now);
-  const curve = token.isCurve ? curvePct(token.liquidity) : null;
+  // Portal-reported graduation progress — never a guess derived from liquidity
+  const curve = token.isCurve ? (token.curveProgress ?? null) : null;
+  // a flat 0% next to an empty sparkline is noise: the token simply hasn't traded
+  const hasTrend = (token.sparkline?.length ?? 0) > 1;
+  const chg = hasTrend || token.priceChange24h ? token.priceChange24h : undefined;
 
   return (
     <div
@@ -118,7 +122,8 @@ export function FeedCard({ token, now, onSelect, priority }: FeedCardProps) {
       <div className="mt-2 grid grid-cols-3 gap-1.5 px-3">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-3">
-            {token.isCurve ? 'Curve' : 'Liq'}
+            {/* curve tokens have no LP — this is the ETH held by the curve itself */}
+            {token.isCurve ? 'Reserve' : 'Liq'}
           </div>
           <div className="num text-[13px] font-semibold">{fmtUsd(token.liquidity)}</div>
         </div>
@@ -135,19 +140,34 @@ export function FeedCard({ token, now, onSelect, priority }: FeedCardProps) {
       {/* bonding curve */}
       {curve !== null && (
         <div className="mt-2 px-3">
-          <div className="mb-1 flex items-center justify-between text-[9px] font-semibold uppercase tracking-wider text-ink-3">
-            <span>Curve</span>
-            <span className="num text-pulse">{curve.toFixed(0)}%</span>
+          <div
+            className="mb-1 flex items-center justify-between text-[9px] font-semibold uppercase tracking-wider text-ink-3"
+            title="Progress toward graduating from the bonding curve to a DEX pool"
+          >
+            <span>To DEX</span>
+            <span className="num text-pulse">{curve < 0.1 && curve > 0 ? '<0.1' : curve.toFixed(1)}%</span>
           </div>
           <div className="h-1 overflow-hidden rounded-full bg-surface-2">
-            <div className="h-full rounded-full bg-pulse transition-all duration-500" style={{ width: `${curve}%` }} />
+            <div
+              className="h-full rounded-full bg-pulse transition-all duration-500"
+              style={{ width: `${Math.max(curve, curve > 0 ? 1.5 : 0)}%` }}
+            />
           </div>
         </div>
       )}
 
-      {/* sparkline + age */}
-      <div className="mt-2 flex items-center justify-between px-3">
-        <Sparkline points={token.sparkline} width={90} height={24} />
+      {/* price trend + age — the line is meaningless without a labelled number */}
+      <div className="mt-2 flex items-center justify-between gap-2 px-3">
+        <div className="flex min-w-0 items-center gap-2" title="Price trend since launch">
+          <Sparkline points={token.sparkline} width={64} height={22} />
+          {chg !== undefined && (
+            <span
+              className={`num text-[11px] font-semibold ${chg >= 0 ? 'text-up' : 'text-down'}`}
+            >
+              {fmtPct(chg)}
+            </span>
+          )}
+        </div>
         <span className="num text-[11px] text-ink-2">{fmtAge(token.createdAt, now)}</span>
       </div>
 

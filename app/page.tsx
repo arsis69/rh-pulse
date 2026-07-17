@@ -61,9 +61,10 @@ export default function RHPulse() {
       <StatsBar onSelectToken={setSelectedToken} />
 
       <main className="mx-auto max-w-[1500px] px-4 pb-16 sm:px-6">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_300px]">
-          {/* feed area */}
-          <div className="min-w-0">
+        <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[1fr_300px]">
+          {/* feed area — ordered after the whale panel on narrow screens so the
+              panel stays visible instead of sitting below a 180-card grid */}
+          <div className="order-2 min-w-0 lg:order-none">
             {/* controls */}
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
               <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
@@ -109,9 +110,9 @@ export default function RHPulse() {
             )}
           </div>
 
-          {/* desktop sidebar */}
-          <aside className="hidden lg:block">
-            <div className="sticky top-20">
+          {/* whale sidebar — sticky column on desktop, capped panel on mobile */}
+          <aside className="order-1 lg:order-none">
+            <div className="lg:sticky lg:top-20">
               <RecentTrades now={now} onSelectToken={setSelectedToken} />
             </div>
           </aside>

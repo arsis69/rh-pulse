@@ -26,6 +26,9 @@ export function shortAddr(a: string): string {
 }
 
 // Rough visual progress for bonding-curve tokens. Replace with real target when available.
-export function curvePct(liquidity: number): number {
-  return Math.min(100, Math.max(0, (liquidity / 60_000) * 100));
+export function fmtPct(v: number): string {
+  const sign = v >= 0 ? '+' : '';
+  if (Math.abs(v) >= 1000) return `${sign}${Math.round(v / 100) / 10}k%`;
+  if (Math.abs(v) >= 100) return `${sign}${v.toFixed(0)}%`;
+  return `${sign}${v.toFixed(1)}%`;
 }
