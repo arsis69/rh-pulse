@@ -167,14 +167,14 @@ export default function IntroPage() {
               <div>
                 <Kicker>The token</Kicker>
                 <h2 className="mt-3 text-[28px] font-bold leading-tight tracking-tight sm:text-[34px]">
-                  Hold $PULSE, unlock the edge
+                  Hold $PULSE, keep Pulse free
                 </h2>
                 <p className="mt-5 text-[15.5px] leading-[1.7] text-ink-2">
-                  Holders get the premium layer inside Pulse. The whale and smart money feed, custom launch and price
-                  alerts, and higher limits across the app. The reason to hold is access.
+                  Pulse is a free app. There are no premium tiers, paywalled feeds, or locked features. Holding $PULSE
+                  is how the community funds the product directly.
                 </p>
                 <ul className="mt-6 space-y-3">
-                  {['Whale and smart money feed', 'Custom launch and price alerts', 'Higher limits across the app'].map((t) => (
+                  {['Smarter AI models and scoring', 'More data sources and launchpads', 'Faster infrastructure and new features'].map((t) => (
                     <li key={t} className="flex items-center gap-3 text-[14.5px] text-ink">
                       <span className="flex h-5 w-5 items-center justify-center rounded-full bg-pulse/15 text-pulse">
                         <ArrowRight className="h-3 w-3" />
@@ -188,8 +188,9 @@ export default function IntroPage() {
               <div className="flex flex-col justify-center rounded-2xl border border-edge bg-surface-2 p-6">
                 <div className="text-[12px] font-semibold uppercase tracking-wider text-ink-2">Where the fees go</div>
                 <p className="mt-3 text-[14.5px] leading-[1.7] text-ink-2">
-                  Every $PULSE trade carries the standard 1% pons fee. Of that, 0.7% flows straight into Pulse, paying
-                  for the servers, the AI that scores every token, the data, and everything shipped next.
+                  Every $PULSE trade carries a 1% fee. The share that flows back to Pulse is reinvested entirely into
+                  better AI, more signals, infrastructure, and continuous improvements — never to hide features behind
+                  a paywall.
                 </p>
                 {/* split bar */}
                 <div className="mt-6">
@@ -198,12 +199,12 @@ export default function IntroPage() {
                     <div className="bg-surface-3" style={{ width: '30%' }} />
                   </div>
                   <div className="num mt-3 flex justify-between text-[12px]">
-                    <span className="text-pulse">0.7% to Pulse</span>
+                    <span className="text-pulse">0.7% reinvested into Pulse</span>
                     <span className="text-ink-3">0.3% protocol</span>
                   </div>
                 </div>
                 <p className="mt-6 text-[13px] leading-relaxed text-ink-3">
-                  The token you trade funds the product you use.
+                  No paywalls. Just a better free app.
                 </p>
               </div>
             </div>
