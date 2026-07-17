@@ -152,6 +152,21 @@ function buildSparkline(trades: { ts: number; priceWei: bigint }[]): number[] | 
   return out;
 }
 
+// Price move across a window, from the curve's own prints. Anchored on the last
+// print *before* the window when there is one, so a token whose only trades are
+// inside the hour still reports the move that happened during it.
+function pctChangeSince(trades: { ts: number; priceWei: bigint }[], since: number): number | undefined {
+  const sorted = [...trades].filter((t) => t.priceWei > 0n).sort((a, b) => a.ts - b.ts);
+  if (!sorted.length) return undefined;
+  const inWindow = sorted.filter((t) => t.ts >= since);
+  if (!inWindow.length) return undefined;
+  const before = sorted.filter((t) => t.ts < since).pop();
+  const start = Number((before ?? inWindow[0]).priceWei);
+  const end = Number(inWindow[inWindow.length - 1].priceWei);
+  if (!start || !end) return undefined;
+  return (end / start - 1) * 100;
+}
+
 // Overwrite event-derived guesses with the Portal's own numbers: `reserve` is
 // the ETH really in the curve and `progress` is the real graduation percent.
 async function applyCurveStates(tokens: Token[], ethUsd: number) {
@@ -216,6 +231,7 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
 
   const now = Math.floor(Date.now() / 1000);
   const dayAgo = now - 86400;
+  const hourAgo = now - 3600;
 
   // prune: keep tokens created in the last 24h, cap map size
   for (const [key, st] of curve) {
@@ -246,6 +262,8 @@ export async function refreshFlap(ethUsd: number): Promise<FlapSnapshot> {
           ? (Number(st.lastPriceWei) / Number(st.firstPriceWei) - 1) * 100
           : undefined,
       txns24h: st.trades.length,
+      volume1h: st.trades.filter((t) => t.ts >= hourAgo).reduce((s, t) => s + t.eth, 0) * ethUsd,
+      priceChange1h: pctChangeSince(st.trades, hourAgo),
       sparkline: buildSparkline(st.trades),
       hasX: false,
       isCurve: true,

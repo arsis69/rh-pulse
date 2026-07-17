@@ -3,30 +3,12 @@
 import { usePulseStore } from '@/lib/store';
 import { fmtUsd, fmtEth, fmtAge, shortAddr } from '@/lib/format';
 import { Token } from '@/lib/types';
+import { stubToken } from '@/lib/stubToken';
 
 interface RecentTradesProps {
   now: number;
   className?: string;
   onSelectToken?: (token: Token) => void;
-}
-
-// The traded coin may have scrolled out of the feed — build a minimal Token so
-// the drawer still opens (AI analysis + contract work; live stats may be blank).
-function stubToken(address: string, ticker?: string): Token {
-  return {
-    id: address.toLowerCase(),
-    address,
-    ticker: ticker || '???',
-    name: ticker || 'Unknown',
-    launchpad: 'other',
-    source: 'flap',
-    createdAt: 0,
-    liquidity: 0,
-    mcap: 0,
-    volume24h: 0,
-    hasX: false,
-    scoreSource: null,
-  };
 }
 
 export function RecentTrades({ now, className, onSelectToken }: RecentTradesProps) {

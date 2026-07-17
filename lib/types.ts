@@ -30,8 +30,10 @@ export interface Token {
   liquidity: number; // USD; for flap curve tokens this is a curve estimate
   mcap: number; // USD (fdv fallback)
   volume24h: number; // USD
+  volume1h?: number; // USD in the last hour — real window, not a sample of recent trades
   priceUsd?: number;
   priceChange24h?: number; // percent; curve tokens: change since first trade
+  priceChange1h?: number; // percent over the last hour
   txns24h?: number;
   holders?: number;
   supply?: number; // whole tokens, from chain

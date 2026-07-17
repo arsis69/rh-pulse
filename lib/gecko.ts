@@ -16,7 +16,7 @@ interface GTPool {
     market_cap_usd: string | null;
     base_token_price_usd: string | null;
     pool_created_at: string;
-    volume_usd: { h24: string | null };
+    volume_usd: { h24: string | null; h1?: string | null };
     transactions: { h24?: { buys: number; sells: number } };
     price_change_percentage: Record<string, string | null>;
   };
@@ -88,8 +88,10 @@ async function fetchPoolsFrom(url: string): Promise<Token[]> {
       liquidity: num(a.reserve_in_usd),
       mcap: num(a.market_cap_usd) || num(a.fdv_usd),
       volume24h: num(a.volume_usd?.h24),
+      volume1h: num(a.volume_usd?.h1),
       priceUsd: num(a.base_token_price_usd) || undefined,
       priceChange24h: num(a.price_change_percentage?.h24),
+      priceChange1h: num(a.price_change_percentage?.h1),
       txns24h: a.transactions?.h24 ? a.transactions.h24.buys + a.transactions.h24.sells : undefined,
       sparkline: synthSparkline(a.price_change_percentage),
       imageUrl: base.attributes.image_url || undefined,
