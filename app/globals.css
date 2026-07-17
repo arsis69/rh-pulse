@@ -9,11 +9,19 @@
   --color-edge-bright: rgba(255, 255, 255, 0.22);
 
   --color-ink: #f4f6f8;
-  --color-ink-2: #a0a0a0;
-  --color-ink-3: #666666;
+  --color-ink-2: #b4b4b4;
+  /* was #666 — only ~3.9:1 against the surface, under the 4.5:1 AA floor for
+     small text, so every label and caption read as muted-to-invisible */
+  --color-ink-3: #8c8c8c;
 
   --color-up: #22c55e;
   --color-down: #ef4444;
+
+  /* semantic icon accents — each matches what its icon means, rather than
+     tinting the UI for decoration's sake */
+  --color-hot: #ff6b35; /* flame */
+  --color-cool: #38bdf8; /* clock */
+  --color-spark: #facc15; /* zap */
 
   --color-pulse: #CCFF00;
   --color-pulse-soft: rgba(204, 255, 0, 0.16);

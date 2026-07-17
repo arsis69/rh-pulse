@@ -27,6 +27,7 @@ export function StatsBar({ onSelectToken }: StatsBarProps) {
       value: stats.launches24h ? String(stats.launches24h) : '—',
       sub: 'all launchpads',
       icon: Rocket,
+      tint: 'var(--color-pulse)',
       onClick: undefined,
     },
     {
@@ -34,6 +35,7 @@ export function StatsBar({ onSelectToken }: StatsBarProps) {
       value: stats.launches1h ? String(stats.launches1h) : '—',
       sub: 'new tokens',
       icon: Clock,
+      tint: 'var(--color-cool)',
       onClick: undefined,
     },
     {
@@ -41,6 +43,7 @@ export function StatsBar({ onSelectToken }: StatsBarProps) {
       value: stats.hottest ? `$${stats.hottest.ticker}` : '—',
       sub: stats.hottest ? `${fmtUsd(stats.hottest.volume24h)} volume` : '',
       icon: Flame,
+      tint: 'var(--color-hot)',
       onClick: () => {
         if (!stats.hottest || !onSelectToken) return;
         const t = tokens.find((x) => x.id === stats.hottest!.address.toLowerCase());
@@ -52,6 +55,7 @@ export function StatsBar({ onSelectToken }: StatsBarProps) {
       value: newest ? `$${newest.ticker}` : '—',
       sub: newest ? `${fmtAge(newest.createdAt, now)} ago · ${newest.launchpad}` : '',
       icon: Zap,
+      tint: 'var(--color-spark)',
       onClick: () => {
         if (newest && onSelectToken) onSelectToken(newest);
       },
@@ -67,11 +71,17 @@ export function StatsBar({ onSelectToken }: StatsBarProps) {
           className={`glass-border bg-surface rounded-2xl p-4 hover-lift glass-hover ${it.onClick ? 'cursor-pointer' : ''}`}
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-3">{it.label}</div>
-            <it.icon className="h-4 w-4 shrink-0 text-ink-3" />
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2">{it.label}</div>
+            {/* tinted chip so the icon reads as its own thing, like the tape */}
+            <span
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+              style={{ background: `color-mix(in srgb, ${it.tint} 14%, transparent)` }}
+            >
+              <it.icon className="h-4 w-4" style={{ color: it.tint }} />
+            </span>
           </div>
           <div className="mt-2 truncate text-[30px] font-bold leading-none tracking-tight">{it.value}</div>
-          <div className="num mt-1.5 truncate text-[13px] text-ink-3">{it.sub}</div>
+          <div className="num mt-1.5 truncate text-[13px] text-ink-2">{it.sub}</div>
         </div>
       ))}
     </div>

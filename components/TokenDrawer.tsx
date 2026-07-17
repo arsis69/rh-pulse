@@ -113,7 +113,7 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                   <div className="rounded-2xl border border-edge bg-surface-2 p-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-3">Trust score</div>
+                        <div className="text-[12px] font-semibold uppercase tracking-wider text-ink-2">Trust score</div>
                         <div className="mt-1 text-[13px] text-ink-2">Live chain signals · ranked vs the board</div>
                       </div>
                       <div
@@ -134,23 +134,28 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                         {token.scoreParts.map((p) => {
                           const counted = p.weight > 0;
                           return (
-                            <div key={p.label}>
-                              <div className="flex items-center gap-2">
-                                <div className="w-[104px] shrink-0 text-[11px] text-ink-2">{p.label}</div>
-                                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
-                                  {counted && (
-                                    <div
-                                      className="h-full rounded-full bg-pulse"
-                                      style={{ width: `${(p.value / p.weight) * 100}%` }}
-                                    />
-                                  )}
-                                </div>
-                                <div className="num w-[44px] shrink-0 text-right text-[11px] text-ink-3">
-                                  {counted ? `${p.value}/${p.weight}` : '—'}
-                                </div>
+                            // grid, not flex+manual padding: a fixed label column
+                            // guarantees the detail line below lines up with the
+                            // bar exactly, instead of eyeballing a padding value
+                            // that has to match the label width + gap by hand
+                            // (it didn't, hence the "tilted left" look).
+                            <div key={p.label} className="grid grid-cols-[104px_1fr_44px] items-center gap-2">
+                              <div className="text-[12px] text-ink-2">{p.label}</div>
+                              <div className="h-1.5 overflow-hidden rounded-full bg-surface">
+                                {counted && (
+                                  <div
+                                    className="h-full rounded-full bg-pulse"
+                                    style={{ width: `${(p.value / p.weight) * 100}%` }}
+                                  />
+                                )}
+                              </div>
+                              <div className="num text-right text-[12px] text-ink-2">
+                                {counted ? `${p.value}/${p.weight}` : '—'}
                               </div>
                               {/* the "—" already says it isn't counted */}
-                              <div className="mt-1 pl-[104px] text-[10px] leading-snug text-ink-3">{p.detail}</div>
+                              <div className="col-start-2 col-end-4 -mt-0.5 text-[11px] leading-snug text-ink-2">
+                                {p.detail}
+                              </div>
                             </div>
                           );
                         })}
@@ -280,8 +285,8 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-edge bg-surface-2 p-3">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">{label}</div>
-      <div className="num mt-1 text-[18px] font-semibold text-ink">{value}</div>
+      <div className="text-[12px] font-semibold uppercase tracking-wider text-ink-2">{label}</div>
+      <div className="num mt-1.5 text-[20px] font-semibold text-ink">{value}</div>
     </div>
   );
 }
