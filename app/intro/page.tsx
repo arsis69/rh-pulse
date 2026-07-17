@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Nav } from '@/components/Nav';
+import { CopyCa } from '@/components/CopyCa';
 import { ScanSearch, Cpu, ShieldCheck, ArrowRight, Radar, Gauge, Sparkles } from 'lucide-react';
 
 export const metadata = {
@@ -69,6 +70,11 @@ export default function IntroPage() {
             <Stat value="0% tax" label="no mint, no games" />
             <Stat value="0.7%" label="of trades fund the app" />
           </div>
+
+          {/* contract address */}
+          <section className="mt-12 flex justify-center sm:mt-14">
+            <CopyCa address="0x1768f95ccbbca58d7167aca8ddfad22f22649d1c" />
+          </section>
         </section>
 
         {/* ---------------- the card + why ---------------- */}
