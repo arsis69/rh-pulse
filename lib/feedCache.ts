@@ -199,18 +199,38 @@ async function saveSeenGecko() {
 // (updated stats), unseen ones survive list churn so cards don't vanish.
 // Quiet launchpads are never evicted by the cap — pons spam (~30 pools/min)
 // would otherwise flush a virtuals launch out of memory within minutes.
-const PROTECTED_LAUNCHPADS = new Set(['virtuals', 'bankr']);
+/**
+ * Eviction keeps the newest N of EACH launchpad, then trims oldest-first.
+ *
+ * The previous version exempted virtuals/bankr from eviction entirely, to stop
+ * them being churned out by pons spam. That over-corrected into starvation: the
+ * exempt launchpads grew without limit (552 entries against a 400 cap), so the
+ * cap was permanently breached, so eviction ran on every absorb and deleted
+ * every non-exempt token immediately — pons was wiped the moment it landed and
+ * its filter tab vanished. A per-launchpad quota gives quiet launchpads the same
+ * protection without letting any of them crowd the others out.
+ */
+const PER_LAUNCHPAD_KEEP = 80;
 function absorbGecko(tokens: Token[]) {
   for (const t of tokens) state.seenGecko.set(t.id, t);
   void saveSeenGecko();
   if (state.seenGecko.size <= SEEN_GECKO_MAX) return;
-  const dayAgo = Date.now() / 1000 - 86400;
-  for (const [k, v] of state.seenGecko) {
-    if (v.createdAt < dayAgo && !PROTECTED_LAUNCHPADS.has(v.launchpad)) state.seenGecko.delete(k);
+
+  const byLaunchpad = new Map<string, Token[]>();
+  for (const t of state.seenGecko.values()) {
+    const arr = byLaunchpad.get(t.launchpad) ?? [];
+    arr.push(t);
+    byLaunchpad.set(t.launchpad, arr);
   }
-  if (state.seenGecko.size <= SEEN_GECKO_MAX) return;
+
+  const keep = new Set<string>();
+  for (const arr of byLaunchpad.values()) {
+    arr.sort((a, b) => b.createdAt - a.createdAt); // newest first
+    for (const t of arr.slice(0, PER_LAUNCHPAD_KEEP)) keep.add(t.id);
+  }
+
   const evictable = [...state.seenGecko.values()]
-    .filter((t) => !PROTECTED_LAUNCHPADS.has(t.launchpad))
+    .filter((t) => !keep.has(t.id))
     .sort((a, b) => a.createdAt - b.createdAt); // oldest first
   for (const t of evictable) {
     if (state.seenGecko.size <= SEEN_GECKO_MAX) break;

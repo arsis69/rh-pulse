@@ -63,29 +63,37 @@ function pct(values: number[], p: number): number {
   return v[Math.min(Math.floor(v.length * p), v.length - 1)];
 }
 
-// Full marks are pinned near the TOP of the board (p95), not p90. At p90 the
-// reference was $444 of volume, so every token with any real trading pinned at
-// 25/25 and the component stopped discriminating between $500 and $9,000.
+// These are "half marks" anchors for the curve in rel(), not full-marks bars —
+// p75 of the tokens that have any activity at all.
 export function computeBoardStats(board: Token[]): BoardStats {
   return {
-    volume24hRef: pct(board.map((t) => t.volume24h ?? 0), 0.95),
-    volume1hRef: pct(board.map((t) => t.volume1h ?? 0), 0.95),
-    liquidityRef: pct(board.map((t) => t.liquidity ?? 0), 0.95),
-    holdersRef: pct(board.map((t) => t.holders ?? 0), 0.95),
+    volume24hRef: pct(board.map((t) => t.volume24h ?? 0), 0.75),
+    volume1hRef: pct(board.map((t) => t.volume1h ?? 0), 0.75),
+    liquidityRef: pct(board.map((t) => t.liquidity ?? 0), 0.75),
+    holdersRef: pct(board.map((t) => t.holders ?? 0), 0.75),
   };
 }
 
 /**
- * Ratio against a board reference, with a floor so a dead board can't hand out
- * full marks. The floors are absolute "this is genuinely good on this chain"
- * levels, measured from real data: p99 volume is ~$5.8k and the busiest token
- * ever seen does ~$15k, so ~$2.5k of 24h volume earning full traction is a
- * defensible ceiling that still separates $500 from $5,000.
+ * Diminishing-returns curve: value / (value + k), where k is the "half marks"
+ * point. Never saturates, so bigger is ALWAYS better and two tokens can't tie
+ * just for clearing a bar.
+ *
+ * The previous `min(1, value/ref)` clamped, which meant everything past the
+ * reference scored identically — $8.3k of volume and $115k of volume both took
+ * 25/25, and liquidity gave $6.5k and $14k the same 15/15. (The board really does
+ * carry $115k tokens, so this wasn't hypothetical.) This curve gives 50% at k,
+ * 67% at 2k, 91% at 10k and approaches but never reaches 100%: a genuinely huge
+ * token still outranks a merely good one, at every scale, forever.
+ *
+ * k tracks the live board (p75 of tokens that have any) with an absolute floor,
+ * so it self-calibrates upward as the chain grows.
  */
 function rel(value: number, boardRef: number, floor: number): number {
-  const ref = Math.max(boardRef, floor);
-  if (ref <= 0) return 0;
-  return Math.min(1, value / ref);
+  if (value <= 0) return 0;
+  const k = Math.max(boardRef, floor);
+  if (k <= 0) return 0;
+  return value / (value + k);
 }
 
 /**
@@ -114,10 +122,12 @@ function concentrationMultiplier(top10Pct: number): number {
   return 1 - t * (1 - FLOOR);
 }
 
-const VOL24_FLOOR = 2_500;
-const VOL1H_FLOOR = 1_000;
-const LIQ_FLOOR = 8_000;
-const HOLDERS_FLOOR = 25;
+// "Half marks" points for rel(). A token doing $1.2k of 24h volume on this chain
+// is squarely mid-table and scores half of Traction; $8k scores ~87%, $115k ~99%.
+const VOL24_FLOOR = 1_200;
+const VOL1H_FLOOR = 500;
+const LIQ_FLOOR = 4_000;
+const HOLDERS_FLOOR = 12;
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
@@ -212,9 +222,13 @@ export function computeChainScore(token: Token, board: BoardStats): ChainScore {
   let pressure: number | undefined;
   let pressureDetail = 'buy/sell split unavailable';
   if (hasSplit && trades > 0) {
+    // Two saturating factors instead of two clamps: 19 trades at 84% buys and 84
+    // trades at 74% buys both used to pin at 15/15. Conviction grows with the
+    // sample (trades/(trades+10)), and the ratio has real headroom above 80%.
     const ratio = buys / trades; // 0.5 = balanced
-    // needs enough trades to mean anything — 1 buy is not 100% buy pressure
-    pressure = clamp01((ratio - 0.35) / 0.4) * clamp01(trades / 12);
+    const ratioScore = clamp01((ratio - 0.35) / 0.55); // 35% buys = 0, 90% = 1
+    const confidence = trades / (trades + 10); // 10 trades = half conviction
+    pressure = ratioScore * confidence;
     pressureDetail = `${buys} buys / ${sells} sells`;
   } else if (v24 <= 0) {
     // genuinely known: nothing has traded at all
