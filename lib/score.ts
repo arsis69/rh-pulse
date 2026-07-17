@@ -1,4 +1,5 @@
 import { Token, ScoreBreakdown, ageMinutes } from '@/lib/types';
+import { fmtUsd } from '@/lib/format';
 
 const STABLE_WRAPPED_BLACKLIST = new Set([
   'WETH',
@@ -45,42 +46,73 @@ export function scoreColor(score: number): string {
  * The old scorer hardcoded Ethereum-sized thresholds (full marks at $50k volume,
  * 300 holders, $30k liquidity) on a chain whose best token does $15k and 79
  * holders — so every component sat near zero and 104 of 179 tokens tied at 8/100.
- * Instead, derive "full marks" from the live board itself: p90 of the tokens
- * currently tracked. That self-calibrates as the chain grows and never needs
- * re-tuning.
+ * Instead, derive "full marks" from the live board itself, so it self-calibrates
+ * as the chain grows and never needs re-tuning. Paired with absolute floors
+ * below, since a board of ghosts must not make a mediocre token look great.
  */
 export interface BoardStats {
-  volume24hP90: number;
-  volume1hP90: number;
-  liquidityP90: number;
-  holdersP90: number;
-  txnsP90: number;
+  volume24hRef: number;
+  volume1hRef: number;
+  liquidityRef: number;
+  holdersRef: number;
 }
 
-function p90(values: number[]): number {
+function pct(values: number[], p: number): number {
   const v = values.filter((x) => x > 0).sort((a, b) => a - b);
   if (!v.length) return 0;
-  return v[Math.min(Math.floor(v.length * 0.9), v.length - 1)];
+  return v[Math.min(Math.floor(v.length * p), v.length - 1)];
 }
 
+// Full marks are pinned near the TOP of the board (p95), not p90. At p90 the
+// reference was $444 of volume, so every token with any real trading pinned at
+// 25/25 and the component stopped discriminating between $500 and $9,000.
 export function computeBoardStats(board: Token[]): BoardStats {
   return {
-    volume24hP90: p90(board.map((t) => t.volume24h ?? 0)),
-    volume1hP90: p90(board.map((t) => t.volume1h ?? 0)),
-    liquidityP90: p90(board.map((t) => t.liquidity ?? 0)),
-    holdersP90: p90(board.map((t) => t.holders ?? 0)),
-    txnsP90: p90(board.map((t) => t.txns24h ?? 0)),
+    volume24hRef: pct(board.map((t) => t.volume24h ?? 0), 0.95),
+    volume1hRef: pct(board.map((t) => t.volume1h ?? 0), 0.95),
+    liquidityRef: pct(board.map((t) => t.liquidity ?? 0), 0.95),
+    holdersRef: pct(board.map((t) => t.holders ?? 0), 0.95),
   };
 }
 
-// Ratio against a board reference, but never divide by a dead board: if the p90
-// itself is tiny, fall back to an absolute floor so "best of the ghosts" can't
-// manufacture full marks.
-function rel(value: number, boardP90: number, floor: number): number {
-  const ref = Math.max(boardP90, floor);
+/**
+ * Ratio against a board reference, with a floor so a dead board can't hand out
+ * full marks. The floors are absolute "this is genuinely good on this chain"
+ * levels, measured from real data: p99 volume is ~$5.8k and the busiest token
+ * ever seen does ~$15k, so ~$2.5k of 24h volume earning full traction is a
+ * defensible ceiling that still separates $500 from $5,000.
+ */
+function rel(value: number, boardRef: number, floor: number): number {
+  const ref = Math.max(boardRef, floor);
   if (ref <= 0) return 0;
   return Math.min(1, value / ref);
 }
+
+/**
+ * How much to discount Distribution for concentrated supply.
+ *
+ * The old curve ran 1.0 at 40% down to ~0 at 95%, which handed 49% concentration
+ * 17/20 (near-perfect) and 89% just 2/20 — a 7.6x swing across two tokens that
+ * are both simply "early". Measured reality: the MEDIAN token on this board has
+ * its top 10 holding 100% of supply, so 89% is around average here and 49% is
+ * genuinely top-decile. The curve now starts biting earlier (nothing is
+ * "perfectly distributed" at 40%) but bottoms out at 0.3 instead of 0, because
+ * concentration alone shouldn't erase a token that has real holders and volume.
+ * Extreme cases are still caught hard by the top1 > 50% flag, which caps the
+ * whole score at 45.
+ */
+function concentrationMultiplier(top10Pct: number): number {
+  const CLEAN = 20; // below this, genuinely well spread
+  const HEAVY = 90; // at/above this, effectively one pocket
+  const FLOOR = 0.3;
+  const t = clamp01((top10Pct - CLEAN) / (HEAVY - CLEAN));
+  return 1 - t * (1 - FLOOR);
+}
+
+const VOL24_FLOOR = 2_500;
+const VOL1H_FLOOR = 1_000;
+const LIQ_FLOOR = 8_000;
+const HOLDERS_FLOOR = 25;
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
@@ -111,7 +143,7 @@ export function computeChainScore(token: Token, board: BoardStats): ChainScore {
    */
   const add = (label: string, weight: number, value01: number | undefined, detail: string) => {
     if (value01 === undefined) {
-      parts.push({ label, weight: 0, value: 0, detail: `${detail} (not counted)` });
+      parts.push({ label, weight: 0, value: 0, detail });
       return;
     }
     known += weight;
@@ -122,9 +154,20 @@ export function computeChainScore(token: Token, board: BoardStats): ChainScore {
   const v24 = token.volume24h ?? 0;
   const v1 = token.volume1h ?? 0;
   const traction = clamp01(
-    0.6 * rel(v1, board.volume1hP90, 50) + 0.4 * rel(v24, board.volume24hP90, 250),
+    0.6 * rel(v1, board.volume1hRef, VOL1H_FLOOR) + 0.4 * rel(v24, board.volume24hRef, VOL24_FLOOR),
   );
-  add('Traction', 25, traction, v24 > 0 ? `$${Math.round(v24)} 24h · $${Math.round(v1)} 1h` : 'no volume');
+  // Almost every token here is under an hour old, so 1h and 24h volume are the
+  // same number — printing both read as "$1959 24h · $1959 1h". Only say it twice
+  // when the two windows actually differ.
+  // sub-dollar dust rendered as "$0.00 · all in the last hour" — same nonsense
+  // the ticker tape used to print. Below a dollar, there is no volume to report.
+  let tractionDetail = 'no volume';
+  if (v24 >= 1) {
+    tractionDetail = v1 >= v24 * 0.95 ? `${fmtUsd(v24)} · all in the last hour` : `${fmtUsd(v24)} 24h · ${fmtUsd(v1)} 1h`;
+  } else if (v24 > 0) {
+    tractionDetail = 'under $1 traded';
+  }
+  add('Traction', 25, traction, tractionDetail);
 
   // ---- Distribution (20): holder count, then punish concentration
   const holders = token.holders;
@@ -132,24 +175,25 @@ export function computeChainScore(token: Token, board: BoardStats): ChainScore {
   let dist: number | undefined;
   let distDetail = 'holders not fetched yet';
   if (holders !== undefined) {
-    dist = rel(holders, board.holdersP90, 15);
-    if (top10 !== undefined) {
-      // 96% of supply in ten wallets (real example: $NEV) should gut this
-      dist *= clamp01(1 - Math.max(0, top10 - 40) / 55);
-    }
-    distDetail = `${holders} holders${top10 !== undefined ? ` · top10 ${top10.toFixed(0)}%` : ''}`;
+    dist = rel(holders, board.holdersRef, HOLDERS_FLOOR);
+    if (top10 !== undefined) dist *= concentrationMultiplier(top10);
+    distDetail = `${holders} holders · top 10 hold ${top10 !== undefined ? `${top10.toFixed(0)}%` : '—'}`;
   }
   add('Distribution', 20, dist, distDetail);
 
   // ---- Progress / liquidity (15)
   const prog = token.isCurve
     ? clamp01((token.curveProgress ?? 0) / 25) // 25% to DEX is already exceptional here
-    : rel(token.liquidity ?? 0, board.liquidityP90, 500);
+    : rel(token.liquidity ?? 0, board.liquidityRef, LIQ_FLOOR);
   add(
     token.isCurve ? 'Curve progress' : 'Liquidity',
     15,
     prog,
-    token.isCurve ? `${(token.curveProgress ?? 0).toFixed(2)}% to DEX` : `$${Math.round(token.liquidity ?? 0)}`,
+    token.isCurve
+      ? `${(token.curveProgress ?? 0).toFixed(2)}% of the way to DEX`
+      : token.liquidity > 0
+        ? `${fmtUsd(token.liquidity)} pooled`
+        : 'no liquidity',
   );
 
   // ---- Buy pressure (15): replaces the old hidden +25 score mutation

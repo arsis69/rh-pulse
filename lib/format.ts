@@ -4,6 +4,9 @@ export function fmtUsd(v: number): string {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
   if (v >= 1_000) return `$${(v / 1_000).toFixed(1)}K`;
   if (v >= 1) return `$${v.toFixed(0)}`;
+  // sub-cent dust rendered as a flat "$0.00", which reads as a real zero and is
+  // how "$0.00 1h vol" got onto the ticker tape
+  if (v < 0.01) return '<$0.01';
   return `$${v.toFixed(2)}`;
 }
 

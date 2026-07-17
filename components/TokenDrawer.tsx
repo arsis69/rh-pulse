@@ -138,24 +138,32 @@ export function TokenDrawer({ token, onClose, now }: TokenDrawerProps) {
                     )}
 
                     {token.scoreParts && token.scoreParts.length > 0 && (
-                      <div className="mt-3 space-y-1.5 border-t border-edge pt-3">
-                        {token.scoreParts.map((p) => (
-                          <div key={p.label} className="flex items-center gap-2">
-                            <div className="w-[92px] shrink-0 text-[11px] text-ink-2">{p.label}</div>
-                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
-                              <div
-                                className="h-full rounded-full bg-pulse"
-                                style={{ width: `${p.weight ? (p.value / p.weight) * 100 : 0}%` }}
-                              />
+                      <div className="mt-3 space-y-2.5 border-t border-edge pt-3">
+                        {/* detail sits on its own line: squeezed into a column it
+                            truncated to "deployer unknown (not count" */}
+                        {token.scoreParts.map((p) => {
+                          const counted = p.weight > 0;
+                          return (
+                            <div key={p.label}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-[104px] shrink-0 text-[11px] text-ink-2">{p.label}</div>
+                                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
+                                  {counted && (
+                                    <div
+                                      className="h-full rounded-full bg-pulse"
+                                      style={{ width: `${(p.value / p.weight) * 100}%` }}
+                                    />
+                                  )}
+                                </div>
+                                <div className="num w-[44px] shrink-0 text-right text-[11px] text-ink-3">
+                                  {counted ? `${p.value}/${p.weight}` : '—'}
+                                </div>
+                              </div>
+                              {/* the "—" already says it isn't counted */}
+                              <div className="mt-1 pl-[104px] text-[10px] leading-snug text-ink-3">{p.detail}</div>
                             </div>
-                            <div className="num w-[42px] shrink-0 text-right text-[11px] text-ink-3">
-                              {p.value}/{p.weight}
-                            </div>
-                            <div className="hidden w-[130px] shrink-0 truncate text-[10px] text-ink-3 sm:block" title={p.detail}>
-                              {p.detail}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
